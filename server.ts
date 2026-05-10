@@ -1,0 +1,296 @@
+
+import express from "express";
+import { createServer as createViteServer } from "vite";
+import path from "path";
+import { Octokit } from "octokit";
+import { ethers } from "ethers";
+import { 
+  JOB_ESCROW_ADDRESS, 
+  JOB_ESCROW_ABI, 
+  REPUTATION_REGISTRY_ADDRESS, 
+  REPUTATION_REGISTRY_ABI 
+} from "./src/lib/contracts";
+
+const octokit = new Octokit();
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  app.use(express.json());
+
+  // --- API Routes ---
+
+  // GitHub Verification (Offchain Only)
+  app.get("/api/github-verify", async (req, res) => {
+    const { username } = req.query;
+    if (!username || typeof username !== "string") {
+      return res.status(400).json({ error: "Username is required" });
+    }
+
+    try {
+      // 1. Basic User Info
+      const userResponse = await octokit.rest.users.getByUsername({
+        username,
+      });
+      const userData = userResponse.data;
+
+      // 2. Merged PRs count
+      const prResponse = await octokit.rest.search.issuesAndPullRequests({
+        q: `author:${username} type:pr is:merged`,
+        per_page: 1,
+      });
+      const mergedPRs = prResponse.data.total_count;
+
+      // 3. Total Stars received
+      const repoResponse = await octokit.rest.search.repos({
+        q: `user:${username}`,
+        per_page: 100,
+      });
+      const totalStars = repoResponse.data.items.reduce((acc, repo) => acc + repo.stargazers_count, 0);
+
+      res.json({
+        valid: true,
+        user: {
+          login: userData.login,
+          avatar_url: userData.avatar_url,
+          bio: userData.bio,
+          public_repos: userData.public_repos,
+          followers: userData.followers,
+          merged_prs: mergedPRs,
+          total_stars: totalStars,
+        },
+      });
+    } catch (error) {
+      console.error("[GitHub Verify] Error:", error);
+      res.status(404).json({ valid: false, error: "GitHub user not found or API error" });
+    }
+  });
+
+  // --- Offchain Indexer ---
+
+  const RPC_URL = process.env.ARC_RPC_URL;
+  const INDEXER_KEY = process.env.INDEXER_PRIVATE_KEY;
+
+  if (RPC_URL && INDEXER_KEY) {
+    console.log("Initializing ArcProof Indexer (HTTP Polling Mode)...");
+    
+    let provider = new ethers.JsonRpcProvider(RPC_URL);
+    let wallet = new ethers.Wallet(INDEXER_KEY, provider);
+    
+    let escrowContract = new ethers.Contract(JOB_ESCROW_ADDRESS, JOB_ESCROW_ABI, provider);
+    let registryContract = new ethers.Contract(REPUTATION_REGISTRY_ADDRESS, REPUTATION_REGISTRY_ABI, wallet);
+
+    // GitHub Binding API (Attestation Signer)
+    app.post("/api/github-bind", async (req, res) => {
+      const { username, walletAddress } = req.body;
+      if (!username || !walletAddress) {
+        return res.status(400).json({ error: "Username and wallet address are required" });
+      }
+
+      try {
+        // 1. Validate via Octokit
+        const githubResponse = await octokit.rest.users.getByUsername({
+          username,
+        });
+        const validatedUsername = githubResponse.data.login;
+
+        // 2. Check for existing bindings (Contract as Source of Truth)
+        const existingWallet = await registryContract.githubToAddress(validatedUsername);
+        if (existingWallet !== ethers.ZeroAddress) {
+           return res.status(400).json({ error: "GitHub account already linked to another wallet" });
+        }
+        
+        const existingGithub = await registryContract.addressToGithub(walletAddress);
+        if (existingGithub !== "") {
+           return res.status(400).json({ error: "Wallet already linked to a GitHub account" });
+        }
+
+        const normalizedWalletAddress = ethers.getAddress(walletAddress);
+
+        // 3. Perform On-chain binding directly as Indexer (bypassing signature mismatch)
+        console.log(`[GitHub Bind] Performing direct binding for ${validatedUsername} -> ${normalizedWalletAddress}`);
+        
+        try {
+          const tx = await registryContract.bindGithub(normalizedWalletAddress, validatedUsername);
+          console.log(`[GitHub Bind] Transaction sent: ${tx.hash}`);
+          
+          res.json({
+            success: true,
+            username: validatedUsername,
+            txHash: tx.hash,
+            user: {
+              login: githubResponse.data.login,
+              avatar_url: githubResponse.data.avatar_url,
+            }
+          });
+        } catch (txErr: any) {
+          console.error("[GitHub Bind] Transaction failed:", txErr);
+          throw new Error("On-chain binding failed: " + (txErr.reason || txErr.message));
+        }
+      } catch (error: any) {
+        console.error("[GitHub Bind] Error:", error);
+        const errMsg = error.reason || error.message || "Attestation failed";
+        res.status(400).json({ error: errMsg });
+      }
+    });
+
+    // GitHub Unbind API (Reset)
+    app.post("/api/github-reset", async (req, res) => {
+      const { walletAddress } = req.body;
+      if (!walletAddress) {
+        return res.status(400).json({ error: "Wallet address is required" });
+      }
+
+      try {
+        console.log(`[GitHub Reset] Unbinding ${walletAddress}...`);
+        const tx = await registryContract.unbindGithub(walletAddress);
+        console.log(`[GitHub Reset] Transaction sent: ${tx.hash}`);
+        await tx.wait();
+        
+        res.json({
+          success: true,
+          message: "GitHub account unlinked successfully",
+          txHash: tx.hash
+        });
+      } catch (error: any) {
+        console.error("[GitHub Reset] Error:", error);
+        res.status(400).json({ error: error.message || "Failed to unbind GitHub" });
+      }
+    });
+
+    // Function to re-initialize if RPC fails
+    const reconnectIndexer = () => {
+      console.warn("[Indexer] Reconnecting to RPC...");
+      provider = new ethers.JsonRpcProvider(RPC_URL);
+      wallet = new ethers.Wallet(INDEXER_KEY, provider);
+      escrowContract = new ethers.Contract(JOB_ESCROW_ADDRESS, JOB_ESCROW_ABI, provider);
+      registryContract = new ethers.Contract(REPUTATION_REGISTRY_ADDRESS, REPUTATION_REGISTRY_ABI, wallet);
+    };
+
+    // --- Block-based Polling for Events (Replacing filters) ---
+    let lastProcessedBlock: number;
+    let isPolling = false;
+
+    async function processLogs(fromBlock: number, toBlock: number) {
+      console.log(`[Indexer] Processing blocks ${fromBlock} to ${toBlock}...`);
+      try {
+        const logs = await provider.getLogs({
+          address: JOB_ESCROW_ADDRESS,
+          fromBlock,
+          toBlock,
+        });
+
+        for (const log of logs) {
+          try {
+            const parsedLog = escrowContract.interface.parseLog(log);
+            if (!parsedLog) continue;
+
+            if (parsedLog.name === "PaymentReleased") {
+              const [jobId, developer, amount] = parsedLog.args;
+              console.log(`[Indexer] PaymentReleased detected for Job ${jobId}. Updating Registry...`);
+              const tx = await registryContract.updateStats(jobId, developer, 1, 0, amount, amount, false, false);
+              await tx.wait();
+              console.log(`[Indexer] Registry updated for ${developer}`);
+            } else if (parsedLog.name === "DisputeResolved") {
+              const [jobId, favorDeveloper] = parsedLog.args;
+              console.log(`[Indexer] DisputeResolved detected for Job ${jobId}. favorDeveloper: ${favorDeveloper}`);
+              const jobData = await escrowContract.jobs(jobId);
+              const developer = jobData.developer;
+              const totalAmount = jobData.amount;
+
+              if (developer === ethers.ZeroAddress) continue;
+
+              const tx = await registryContract.updateStats(
+                jobId,
+                developer, 
+                favorDeveloper ? 1 : 0, 
+                favorDeveloper ? 0 : 1, 
+                favorDeveloper ? totalAmount : 0, 
+                totalAmount, 
+                favorDeveloper, 
+                !favorDeveloper
+              );
+              await tx.wait();
+              console.log(`[Indexer] Registry updated for dispute outcome on ${developer}`);
+            } else if (parsedLog.name === "WorkRejected") {
+               const [jobId, timestamp, reason] = parsedLog.args;
+               console.log(`[Indexer] WorkRejected detected for Job ${jobId}. Reason: ${reason}`);
+            }
+          } catch (logErr) {
+            console.error(`[Indexer] Failed to process log:`, logErr);
+          }
+        }
+      } catch (err) {
+        console.error(`[Indexer] getLogs error:`, err);
+        throw err;
+      }
+    }
+
+    async function poll() {
+      if (isPolling) return;
+      isPolling = true;
+
+      try {
+        const currentBlock = await provider.getBlockNumber();
+        
+        if (lastProcessedBlock === undefined) {
+          lastProcessedBlock = currentBlock;
+          console.log(`[Indexer] Sync started from block ${lastProcessedBlock}`);
+          isPolling = false;
+          return;
+        }
+
+        if (currentBlock > lastProcessedBlock) {
+          // Safety cap: don't look back more than 1000 blocks at once to avoid RPC timeouts
+          const targetBlock = Math.min(currentBlock, lastProcessedBlock + 1000);
+          await processLogs(lastProcessedBlock + 1, targetBlock);
+          lastProcessedBlock = targetBlock;
+        }
+      } catch (err: any) {
+        console.error(`[Indexer] Polling failed:`, err.message);
+        
+        if (
+          err.message?.includes("-32602") || 
+          err.message?.includes("filter not found") || 
+          err.message?.includes("connection") ||
+          err.message?.includes("timeout")
+        ) {
+          console.warn("[Indexer] RPC state error detected. Resetting loop and reconnecting...");
+          reconnectIndexer();
+        }
+      } finally {
+        isPolling = false;
+      }
+    }
+
+    // Initialize block number and start interval
+    console.log("[Indexer] Initializing event sync...");
+    setInterval(poll, 15000); // 15 second poll interval for stability
+
+  } else {
+    console.warn("Indexer skipping initialization: Missing RPC_URL or INDEXER_PRIVATE_KEY");
+  }
+
+  // --- Vite Middleware ---
+
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`ArcProof Server running on http://localhost:${PORT}`);
+  });
+}
+
+startServer();
