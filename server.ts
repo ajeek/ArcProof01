@@ -4,6 +4,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { Octokit } from "octokit";
 import { ethers } from "ethers";
+import * as dotenv from "dotenv";
 import { 
   JOB_ESCROW_ADDRESS, 
   JOB_ESCROW_ABI, 
@@ -11,11 +12,37 @@ import {
   REPUTATION_REGISTRY_ABI 
 } from "./src/lib/contracts";
 
+// Load environment variables early
+dotenv.config();
+
 const octokit = new Octokit();
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // --- Strict Security Validation ---
+  const RPC_URL = process.env.ARC_RPC_URL;
+  const INDEXER_KEY = process.env.INDEXER_PRIVATE_KEY;
+
+  if (!RPC_URL) {
+    console.error("CRITICAL ERROR: ARC_RPC_URL is missing from environment.");
+    process.exit(1);
+  }
+
+  if (!INDEXER_KEY || INDEXER_KEY === "YOUR_PRIVATE_KEY_HERE") {
+    console.error("CRITICAL ERROR: INDEXER_PRIVATE_KEY is missing or invalid.");
+    console.error("Please ensure the private key is set in your environment variables (e.g., .env file).");
+    process.exit(1);
+  }
+
+  // Validate the private key format
+  try {
+    new ethers.Wallet(INDEXER_KEY);
+  } catch (err) {
+    console.error("CRITICAL ERROR: INDEXER_PRIVATE_KEY is not a valid hex string.");
+    process.exit(1);
+  }
 
   app.use(express.json());
 
@@ -68,21 +95,17 @@ async function startServer() {
   });
 
   // --- Offchain Indexer ---
-
-  const RPC_URL = process.env.ARC_RPC_URL;
-  const INDEXER_KEY = process.env.INDEXER_PRIVATE_KEY;
-
-  if (RPC_URL && INDEXER_KEY) {
-    console.log("Initializing ArcProof Indexer (HTTP Polling Mode)...");
+  
+  console.log("Initializing ArcProof Indexer (HTTP Polling Mode)...");
     
-    let provider = new ethers.JsonRpcProvider(RPC_URL);
-    let wallet = new ethers.Wallet(INDEXER_KEY, provider);
-    
-    let escrowContract = new ethers.Contract(JOB_ESCROW_ADDRESS, JOB_ESCROW_ABI, provider);
-    let registryContract = new ethers.Contract(REPUTATION_REGISTRY_ADDRESS, REPUTATION_REGISTRY_ABI, wallet);
+  let provider = new ethers.JsonRpcProvider(RPC_URL);
+  let wallet = new ethers.Wallet(INDEXER_KEY, provider);
+  
+  let escrowContract = new ethers.Contract(JOB_ESCROW_ADDRESS, JOB_ESCROW_ABI, provider);
+  let registryContract = new ethers.Contract(REPUTATION_REGISTRY_ADDRESS, REPUTATION_REGISTRY_ABI, wallet);
 
-    // GitHub Binding API (Attestation Signer)
-    app.post("/api/github-bind", async (req, res) => {
+  // GitHub Binding API (Attestation Signer)
+  app.post("/api/github-bind", async (req, res) => {
       const { username, walletAddress } = req.body;
       if (!username || !walletAddress) {
         return res.status(400).json({ error: "Username and wallet address are required" });
@@ -267,10 +290,6 @@ async function startServer() {
     // Initialize block number and start interval
     console.log("[Indexer] Initializing event sync...");
     setInterval(poll, 15000); // 15 second poll interval for stability
-
-  } else {
-    console.warn("Indexer skipping initialization: Missing RPC_URL or INDEXER_PRIVATE_KEY");
-  }
 
   // --- Vite Middleware ---
 
