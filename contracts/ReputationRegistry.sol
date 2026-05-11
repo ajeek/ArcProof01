@@ -292,6 +292,35 @@ contract ReputationRegistry {
         return (devProfiles[user], computeReputation(user));
     }
 
+    /**
+     * @notice Records a rejected work attempt. Impacts reliability score.
+     * Does NOT mark job as fully scored, allowing for eventual completion credit.
+     */
+    function recordRejection(uint256 _jobId, address _developer) external onlyIndexer {
+        DeveloperProfile storage p = devProfiles[_developer];
+        if (!p.exists) p.exists = true;
+
+        p.failedJobs += 1;
+        p.lastActiveTimestamp = block.timestamp;
+
+        // Decay stability slightly on rejection
+        p.stabilityPoints = p.stabilityPoints > 5 ? p.stabilityPoints - 5 : 0;
+
+        (uint8 coreIndex, string memory tier, string memory risk) = getReputationSignals(_developer);
+        
+        emit StatsUpdated(
+            _developer,
+            p.completedJobs,
+            p.failedJobs,
+            p.totalEarnedUSDC,
+            p.disputesWon,
+            p.disputesLost,
+            p.lastActiveTimestamp
+        );
+
+        emit ReputationUpdated(_developer, coreIndex, tier, risk);
+    }
+
     function setIndexer(address _newIndexer) external onlyOwner {
         if (_newIndexer == address(0)) revert InvalidAddress();
 

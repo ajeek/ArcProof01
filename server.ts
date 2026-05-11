@@ -101,8 +101,19 @@ async function startServer() {
   let provider = new ethers.JsonRpcProvider(RPC_URL);
   let wallet = new ethers.Wallet(INDEXER_KEY, provider);
   
+  console.log(`[Indexer] Wallet Address: ${wallet.address}`);
+  
   let escrowContract = new ethers.Contract(JOB_ESCROW_ADDRESS, JOB_ESCROW_ABI, provider);
   let registryContract = new ethers.Contract(REPUTATION_REGISTRY_ADDRESS, REPUTATION_REGISTRY_ABI, wallet);
+
+  // Validate Indexer Authorization
+  registryContract.indexer().then((authorizedIndexer: string) => {
+    if (authorizedIndexer.toLowerCase() !== wallet.address.toLowerCase()) {
+      console.warn(`[Indexer] WARNING: This wallet (${wallet.address}) is NOT the authorized indexer in the ReputationRegistry contract (${authorizedIndexer}). Stats updates will likely fail.`);
+    } else {
+      console.log("[Indexer] Authorization confirmed: Wallet is the authorized indexer.");
+    }
+  }).catch((err: any) => console.error("[Indexer] Failed to verify authorized indexer:", err.message));
 
   // GitHub Binding API (Attestation Signer)
   app.post("/api/github-bind", async (req, res) => {
@@ -204,26 +215,53 @@ async function startServer() {
           toBlock,
         });
 
+        if (logs.length > 0) {
+          console.log(`[Indexer] Found ${logs.length} logs in range.`);
+        }
+
         for (const log of logs) {
           try {
             const parsedLog = escrowContract.interface.parseLog(log);
             if (!parsedLog) continue;
 
+            console.log(`[Indexer] Event detected: ${parsedLog.name} at block ${log.blockNumber}`);
+
             if (parsedLog.name === "PaymentReleased") {
               const [jobId, developer, amount] = parsedLog.args;
-              console.log(`[Indexer] PaymentReleased detected for Job ${jobId}. Updating Registry...`);
+              console.log(`[Indexer] PaymentReleased details: Job ${jobId}, Dev ${developer}, Amount ${amount}`);
+              
+              // Verify if already scored to avoid redundant txs (idempotency check)
+              const alreadyScored = await registryContract.jobScored(jobId);
+              if (alreadyScored) {
+                 console.log(`[Indexer] Job ${jobId} already scored. Skipping.`);
+                 continue;
+              }
+
+              console.log(`[Indexer] Sending updateStats for Job ${jobId} (Completed)...`);
               const tx = await registryContract.updateStats(jobId, developer, 1, 0, amount, amount, false, false);
+              console.log(`[Indexer] Transaction sent: ${tx.hash}. Waiting for confirmation...`);
               await tx.wait();
-              console.log(`[Indexer] Registry updated for ${developer}`);
+              console.log(`[Indexer] Registry updated for ${developer}. Hash: ${tx.hash}`);
             } else if (parsedLog.name === "DisputeResolved") {
               const [jobId, favorDeveloper] = parsedLog.args;
-              console.log(`[Indexer] DisputeResolved detected for Job ${jobId}. favorDeveloper: ${favorDeveloper}`);
+              console.log(`[Indexer] DisputeResolved details: Job ${jobId}, favorDeveloper: ${favorDeveloper}`);
+              
+              const alreadyScored = await registryContract.jobScored(jobId);
+              if (alreadyScored) {
+                 console.log(`[Indexer] Job ${jobId} already scored. Skipping.`);
+                 continue;
+              }
+
               const jobData = await escrowContract.jobs(jobId);
               const developer = jobData.developer;
               const totalAmount = jobData.amount;
 
-              if (developer === ethers.ZeroAddress) continue;
+              if (developer === ethers.ZeroAddress) {
+                console.warn(`[Indexer] DisputeResolved for Job ${jobId} but developer address is zero.`);
+                continue;
+              }
 
+              console.log(`[Indexer] Sending updateStats for Job ${jobId} (Disputed outcome)...`);
               const tx = await registryContract.updateStats(
                 jobId,
                 developer, 
@@ -235,17 +273,31 @@ async function startServer() {
                 !favorDeveloper
               );
               await tx.wait();
-              console.log(`[Indexer] Registry updated for dispute outcome on ${developer}`);
+              console.log(`[Indexer] Registry updated for dispute outcome on ${developer}. Hash: ${tx.hash}`);
             } else if (parsedLog.name === "WorkRejected") {
                const [jobId, timestamp, reason] = parsedLog.args;
                console.log(`[Indexer] WorkRejected detected for Job ${jobId}. Reason: ${reason}`);
+               
+               const jobData = await escrowContract.jobs(jobId);
+               const developer = jobData.developer;
+               if (developer !== ethers.ZeroAddress) {
+                 console.log(`[Indexer] Sending recordRejection for Job ${jobId} (Dev: ${developer})...`);
+                 try {
+                   const tx = await registryContract.recordRejection(jobId, developer);
+                   console.log(`[Indexer] Rejection recorded. Hash: ${tx.hash}`);
+                 } catch (err: any) {
+                   console.error(`[Indexer] Failed to record rejection: ${err.message}`);
+                 }
+               }
+            } else if (parsedLog.name === "JobCreated") {
+               console.log(`[Indexer] JobCreated detected: ${parsedLog.args.jobId}`);
             }
-          } catch (logErr) {
-            console.error(`[Indexer] Failed to process log:`, logErr);
+          } catch (logErr: any) {
+            console.error(`[Indexer] Failed to process log at block ${log.blockNumber}:`, logErr.message);
           }
         }
-      } catch (err) {
-        console.error(`[Indexer] getLogs error:`, err);
+      } catch (err: any) {
+        console.error(`[Indexer] getLogs error:`, err.message);
         throw err;
       }
     }
@@ -258,15 +310,14 @@ async function startServer() {
         const currentBlock = await provider.getBlockNumber();
         
         if (lastProcessedBlock === undefined) {
-          lastProcessedBlock = currentBlock;
-          console.log(`[Indexer] Sync started from block ${lastProcessedBlock}`);
-          isPolling = false;
-          return;
+          // Look back 5000 blocks to catch recent missed events (e.g. if server was down)
+          lastProcessedBlock = Math.max(0, currentBlock - 5000);
+          console.log(`[Indexer] Initialized. Starting sync from history: block ${lastProcessedBlock} (current ${currentBlock})`);
         }
 
         if (currentBlock > lastProcessedBlock) {
-          // Safety cap: don't look back more than 1000 blocks at once to avoid RPC timeouts
-          const targetBlock = Math.min(currentBlock, lastProcessedBlock + 1000);
+          // Safety cap: process in chunks of 5000 blocks
+          const targetBlock = Math.min(currentBlock, lastProcessedBlock + 5000);
           await processLogs(lastProcessedBlock + 1, targetBlock);
           lastProcessedBlock = targetBlock;
         }

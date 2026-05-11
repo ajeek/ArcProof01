@@ -52,8 +52,6 @@ import {
   JOB_ESCROW_ABI, 
   REPUTATION_REGISTRY_ADDRESS, 
   REPUTATION_REGISTRY_ABI,
-  DEV_SCORE_NFT_ADDRESS,
-  DEV_SCORE_NFT_ABI,
   USDC_ADDRESS,
   USDC_ABI
 } from './lib/contracts';
@@ -283,15 +281,7 @@ export default function App() {
   }, [jobCount]);
 
   // Contract Reads: Global Stats or Profile
-  const { data: nftSnapshot, refetch: refetchNFT } = useReadContract({
-    address: DEV_SCORE_NFT_ADDRESS,
-    abi: DEV_SCORE_NFT_ABI,
-    functionName: 'getSnapshot',
-    args: address ? [address] : undefined,
-    query: { enabled: !!address }
-  });
-
-  const { data: registryProfile } = useReadContract({
+  const { data: registryProfile, refetch: refetchProfile } = useReadContract({
     address: REPUTATION_REGISTRY_ADDRESS,
     abi: REPUTATION_REGISTRY_ABI,
     functionName: 'getFullProfile',
@@ -299,7 +289,7 @@ export default function App() {
     query: { enabled: !!address }
   });
 
-  const { data: usdcBalance } = useReadContract({
+  const { data: usdcBalance, refetch: refetchUSDC } = useReadContract({
     address: USDC_ADDRESS,
     abi: USDC_ABI,
     functionName: 'balanceOf',
@@ -348,6 +338,39 @@ export default function App() {
       setBindHash(undefined);
     }
   }, [isBindConfirmed, refetchGithub]);
+
+  useWatchContractEvent({
+    address: REPUTATION_REGISTRY_ADDRESS,
+    abi: REPUTATION_REGISTRY_ABI,
+    eventName: 'ReputationUpdated',
+    onLogs() {
+      console.log("[App] ReputationUpdated event detected. Refetching profile...");
+      refetchProfile();
+    }
+  });
+
+  useWatchContractEvent({
+    address: REPUTATION_REGISTRY_ADDRESS,
+    abi: REPUTATION_REGISTRY_ABI,
+    eventName: 'StatsUpdated',
+    onLogs() {
+      console.log("[App] StatsUpdated event detected. Refetching profile...");
+      refetchProfile();
+    }
+  });
+
+  useWatchContractEvent({
+    address: JOB_ESCROW_ADDRESS,
+    abi: JOB_ESCROW_ABI,
+    eventName: 'PaymentReleased',
+    onLogs() {
+      console.log("[App] PaymentReleased event detected. Refetching profile and USDC...");
+      setTimeout(() => {
+        refetchProfile();
+        refetchUSDC();
+      }, 2000); // Wait for indexer to process
+    }
+  });
 
   // Identity Onboarding State
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -520,13 +543,14 @@ export default function App() {
   });
 
   const stats = useMemo(() => {
-    if (!nftSnapshot) return { score: 0, tier: "Rookie", lastUpdated: 0 };
+    if (!registryProfile) return { score: 0, tier: "Rookie", profile: null };
+    const [profile, reputation] = registryProfile as [any, any];
     return {
-      score: (nftSnapshot as any)[0] || 0,
-      tier: (nftSnapshot as any)[1] || "Rookie",
-      lastUpdated: Number((nftSnapshot as any)[2] || 0)
+      score: reputation.coreIndex || 0,
+      tier: reputation.tier || "Rookie",
+      profile: profile
     };
-  }, [nftSnapshot]);
+  }, [registryProfile]);
 
   const activeJobs = useMemo(() => {
     // This will be filtered in the JobExplorer component or by passing a list
@@ -543,7 +567,6 @@ export default function App() {
             <ShieldCheck className="text-white w-5 h-5" />
           </div>
           <span className="font-semibold tracking-tighter text-xl italic font-serif">ArcProof</span>
-          <span className="text-[10px] bg-arc-ink/5 px-1.5 py-0.5 rounded text-arc-ink/60 uppercase tracking-widest ml-2 font-medium">Testnet</span>
         </div>
 
         <div className="flex items-center gap-4">
@@ -845,50 +868,44 @@ export default function App() {
               {/* Main Panel */}
               <div className="lg:col-span-2 space-y-8">
                 
-                {/* Stats Overview */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <Card className="flex flex-col justify-between">
-                    <div>
-                      <div className="text-[11px] uppercase tracking-widest text-arc-ink/40 font-semibold mb-1">Onchain Tier</div>
-                      <div className="text-3xl font-serif italic text-arc-ink/80">{stats.tier}</div>
+                {/* Execution Integrity Overview */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Card className="flex flex-col justify-between p-6 bg-arc-paper border-arc-line">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="text-[11px] uppercase tracking-widest text-arc-ink/40 font-semibold mb-1">Reputation Tier</div>
+                        <div className="text-4xl font-serif italic text-arc-ink/80">{stats.tier}</div>
+                      </div>
+                      <div className="bg-arc-ink/5 p-2 rounded-lg">
+                        <ShieldCheck className="w-6 h-6 text-arc-ink/40" />
+                      </div>
                     </div>
-                    <div className="mt-4 flex items-center gap-2 text-emerald-600">
+                    <div className="mt-8 flex items-center gap-2 text-emerald-600">
                       <CircleCheck className="w-4 h-4" />
-                      <span className="text-xs font-medium">Verified Snapshot</span>
+                      <span className="text-[11px] font-mono uppercase tracking-tight font-bold">Execution Verified</span>
                     </div>
                   </Card>
                   
-                  <Card className="flex flex-col justify-between border-arc-ink/10 bg-arc-paper">
-                    <div>
-                      <div className="text-[11px] uppercase tracking-widest text-arc-ink/40 font-semibold mb-1">Reputation Score</div>
-                      <div className="text-3xl font-mono text-arc-ink/80">
-                        {registryProfile ? (registryProfile as any).reputation?.coreIndex || "0" : "0"}
-                      </div>
-                    </div>
-                    <div className="mt-4 flex items-center gap-2">
-                       <Badge className={cn(
-                         "text-[9px]",
-                         (registryProfile as any)?.reputation?.riskProfile === 'Low' ? "bg-emerald-100 text-emerald-700" :
-                         (registryProfile as any)?.reputation?.riskProfile === 'Medium' ? "bg-amber-100 text-amber-700" :
-                         "bg-red-100 text-red-700"
-                       )}>
-                         {(registryProfile as any)?.reputation?.riskProfile || 'Unknown'} Risk
-                       </Badge>
-                       <span className="text-[10px] font-medium text-arc-ink/40">Escrow Profile</span>
-                    </div>
-                  </Card>
-
-                  <Card className="flex flex-col justify-between border-arc-ink/20 bg-arc-ink text-white relative overflow-hidden">
+                  <Card className="flex flex-col justify-between p-6 border-arc-ink/20 bg-arc-ink text-white relative overflow-hidden">
                     <div className="absolute top-0 right-0 p-4 opacity-10">
-                      <ShieldCheck className="w-16 h-16" />
+                      <Zap className="w-24 h-24" />
                     </div>
-                    <div>
-                      <div className="text-[11px] uppercase tracking-widest text-white/40 font-semibold mb-1">NFT DevScore</div>
-                      <div className="text-4xl font-mono">{stats.score}</div>
+                    <div className="flex justify-between items-start relative z-10">
+                      <div>
+                        <div className="text-[11px] uppercase tracking-widest text-white/40 font-semibold mb-1">DevScore (Execution Index)</div>
+                        <div className="text-5xl font-mono">{stats.score}</div>
+                      </div>
+                      <Badge className={cn(
+                        "text-[10px] py-1",
+                        (registryProfile as any)?.reputation?.riskProfile === 'Low' ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" :
+                        (registryProfile as any)?.reputation?.riskProfile === 'Medium' ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
+                        "bg-red-500/20 text-red-300 border-red-500/30"
+                      )}>
+                        {(registryProfile as any)?.reputation?.riskProfile || 'Unknown'} Risk Profile
+                      </Badge>
                     </div>
-                    <div className="mt-4 flex items-center justify-between z-10">
-                      <span className="text-[10px] text-white/40 font-mono">ID: ...{DEV_SCORE_NFT_ADDRESS.slice(-4)}</span>
-                      <RefreshNFTButton onRefresh={refetchNFT} />
+                    <div className="mt-8 flex items-center gap-2 relative z-10">
+                       <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Real-time Deterministic State</span>
                     </div>
                   </Card>
                 </div>
@@ -1203,13 +1220,10 @@ export default function App() {
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8 opacity-40">
            <div className="flex items-center gap-2">
               <ShieldCheck className="w-5 h-5" />
-              <span className="font-serif italic font-medium">ArcProof OS</span>
+              <span className="font-serif italic font-medium">ArcProof</span>
            </div>
            <div className="text-[10px] font-mono tracking-tighter uppercase font-bold">
               Execution-verified Reputation Protocol
-           </div>
-           <div className="text-[11px] font-mono tracking-tighter">
-              {JOB_ESCROW_ADDRESS}
            </div>
         </div>
       </footer>
@@ -1218,39 +1232,6 @@ export default function App() {
 }
 
 // --- Specific Components ---
-
-function RefreshNFTButton({ onRefresh }: { onRefresh?: () => void }) {
-  const { writeContract, data: hash, isPending } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
-
-  useEffect(() => {
-    if (isSuccess && onRefresh) {
-      onRefresh();
-    }
-  }, [isSuccess, onRefresh]);
-
-  const handleRefresh = () => {
-    writeContract({
-      address: DEV_SCORE_NFT_ADDRESS,
-      abi: DEV_SCORE_NFT_ABI,
-      functionName: 'refreshNFT',
-    } as any);
-  };
-
-  return (
-    <button 
-      onClick={handleRefresh} 
-      disabled={isPending || isConfirming}
-      className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-    >
-      {(isPending || isConfirming) ? (
-        <Loader2 className="w-4 h-4 animate-spin" />
-      ) : (
-        <RefreshCcw className="w-4 h-4" />
-      )}
-    </button>
-  );
-}
 
 function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, onComplete: (hash?: string) => void, compact?: boolean }) {
   const { address } = useAccount();
@@ -1675,16 +1656,24 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
   );
 }
 
-function DeveloperProfile({ address, allJobs, onSelect }: { address: `0x${string}`, allJobs: bigint[], onSelect: (id: bigint) => void }) {
+function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: `0x${string}`, allJobs: bigint[], onSelect: (id: bigint) => void, onRefresh?: () => void }) {
   const hasJobs = allJobs.length > 0;
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { data: registryProfile } = useReadContract({
+  const { data: registryProfile, refetch } = useReadContract({
     address: REPUTATION_REGISTRY_ADDRESS,
     abi: REPUTATION_REGISTRY_ABI,
     functionName: 'getFullProfile',
     args: [address],
     query: { enabled: !!address }
   });
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await refetch();
+    if (onRefresh) onRefresh();
+    setTimeout(() => setIsRefreshing(false), 1000);
+  };
 
   const reputation = (registryProfile as any)?.reputation;
   const profile = (registryProfile as any)?.profile;
@@ -1698,6 +1687,14 @@ function DeveloperProfile({ address, allJobs, onSelect }: { address: `0x${string
              <div className="flex items-center gap-3">
                <ShieldCheck className="w-5 h-5 text-arc-ink" />
                <h2 className="text-xl font-medium tracking-tight">Reputation Matrix</h2>
+               <button 
+                 onClick={handleManualRefresh}
+                 disabled={isRefreshing}
+                 className="p-1.5 rounded-lg hover:bg-arc-ink/5 transition-colors disabled:opacity-50"
+                 title="Refresh Reputation"
+               >
+                 <RefreshCcw className={cn("w-4 h-4 text-arc-ink/40", isRefreshing && "animate-spin")} />
+               </button>
              </div>
              <Badge className="bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">Active Indexing</Badge>
            </div>
@@ -2072,7 +2069,7 @@ function DisputeTimer({ jobId, onExpire }: { jobId: any, onExpire?: () => void }
   );
 }
 
-function CountdownTimer({ jobId, durationDays }: { jobId: bigint, durationDays: number }) {
+function CountdownTimer({ jobId, durationDays, compact }: { jobId: bigint, durationDays: number, compact?: boolean }) {
   const publicClient = usePublicClient();
   const [assignedAt, setAssignedAt] = useState<number | null>(null);
   const [timeLeft, setTimeLeft] = useState<{ d: number, h: number, m: number, s: number } | null>(null);
@@ -2136,15 +2133,18 @@ function CountdownTimer({ jobId, durationDays }: { jobId: bigint, durationDays: 
   if (!timeLeft) return null;
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-arc-ink/5 border border-arc-line">
-      <Clock className="w-3.5 h-3.5 text-arc-ink/40" />
-      <div className="flex items-baseline gap-1">
-        <span className="text-xs font-mono font-bold">{timeLeft.d}d</span>
-        <span className="text-xs font-mono font-bold">{timeLeft.h}h</span>
-        <span className="text-xs font-mono font-bold">{timeLeft.m}m</span>
-        <span className="text-[10px] font-mono opacity-40">{timeLeft.s}s</span>
+    <div className={cn(
+      "flex items-center gap-1.5 rounded-lg bg-arc-ink/5 border border-arc-line",
+      compact ? "px-1.5 py-0.5" : "px-3 py-1.5"
+    )}>
+      <Clock className={cn("text-arc-ink/40", compact ? "w-3 h-3" : "w-3.5 h-3.5")} />
+      <div className="flex items-baseline gap-1 focus-within:ring-0">
+        <span className={cn("font-mono font-bold", compact ? "text-[10px]" : "text-xs")}>{timeLeft.d}d</span>
+        <span className={cn("font-mono font-bold", compact ? "text-[10px]" : "text-xs")}>{timeLeft.h}h</span>
+        <span className={cn("font-mono font-bold", compact ? "text-[10px]" : "text-xs")}>{timeLeft.m}m</span>
+        {!compact && <span className="text-[10px] font-mono opacity-40">{timeLeft.s}s</span>}
       </div>
-      <span className="text-[10px] uppercase font-bold text-arc-ink/40 tracking-wider ml-1">Left</span>
+      {!compact && <span className="text-[10px] uppercase font-bold text-arc-ink/40 tracking-wider ml-1">Left</span>}
     </div>
   );
 }
@@ -2543,29 +2543,27 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
         onClick={() => onSelect?.(jobId)}
         className="p-4 space-y-3 cursor-pointer hover:border-arc-ink/40 transition-all group"
       >
-        <div className="flex items-center justify-between">
-           <div className="flex items-center gap-2">
-             <Badge className="bg-arc-ink/5 text-arc-ink/40">#{jobId.toString()}</Badge>
-             {Number(status) === 7 ? (
-               <RejectionTimer jobId={jobId} onExpire={handleExpireRejection} />
-             ) : Number(status) === 5 ? (
-               <DisputeTimer jobId={jobId} onExpire={handleExpireDispute} />
-             ) : (Number(status) === 2 || Number(status) === 3) && (
-               <CountdownTimer jobId={jobId} durationDays={parsedMetadata.duration} />
-             )}
-             {isEmployer && role !== 'developer' && (Number(status) === 0 || Number(status) === 1) && (
-               <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={(e) => { e.stopPropagation(); handleCancel(); }} 
-                className="text-[10px] text-red-500 hover:text-red-700 h-5 px-1.5 flex items-center gap-1 active:scale-95"
-               >
-                 <X className="w-3 h-3" />
-                 Cancel
-               </Button>
-             )}
-           </div>
-           <Badge className="bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">{statusLabels[status]}</Badge>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 overflow-hidden">
+             <div className="flex flex-wrap items-center gap-2 min-w-0">
+               <Badge className="bg-arc-ink/5 text-arc-ink/40 shrink-0">#{jobId.toString()}</Badge>
+               <div className="min-w-0">
+                 {Number(status) === 7 ? (
+                   <RejectionTimer jobId={jobId} onExpire={handleExpireRejection} />
+                 ) : Number(status) === 5 ? (
+                   <DisputeTimer jobId={jobId} onExpire={handleExpireDispute} />
+                 ) : (Number(status) === 2 || Number(status) === 3) && (
+                   <CountdownTimer jobId={jobId} durationDays={parsedMetadata.duration} compact />
+                 )}
+               </div>
+             </div>
+             <Badge className={cn(
+               "shrink-0 border whitespace-nowrap",
+               Number(status) === 3 ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-arc-ink/5 text-arc-ink/40 border-arc-line"
+             )}>
+               {statusLabels[status]}
+             </Badge>
+          </div>
         </div>
         <div className="font-semibold text-sm truncate group-hover:text-arc-ink transition-colors">{parsedMetadata.title}</div>
         {Number(status) === 7 && rejectionReasonText && (
@@ -2590,7 +2588,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
             <Briefcase className="w-6 h-6" />
           </div>
           <div>
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex flex-wrap items-center gap-2 mb-2">
               <Badge className="bg-arc-ink text-white">Job #{jobId.toString()}</Badge>
               {Number(status) === 7 ? (
                 <RejectionTimer jobId={jobId} onExpire={handleExpireRejection} />

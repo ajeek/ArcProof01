@@ -1,80 +1,135 @@
-# ArcProof ⚡️
+# ArcProof
+### Deterministic Work Settlement Layer on @arc
 
-On-chain hiring and reputation system powered by USDC escrow-based performance metrics on the **Arc Testnet**.
+ArcProof is a deterministic work settlement layer built on Arc. It is engineered to enforce programmable state transitions for work lifecycles, ensuring that execution outcomes correlate directly with onchain financial settlement.
 
-ArcProof bridges the gap between hiring and payment security, ensuring that developers are paid for their work and employers get the results they expect, all while building a verifiable on-chain reputation.
+ArcProof is NOT a marketplace, hiring platform, or freelancing application. It IS:
+* A deterministic escrow execution system.
+* An onchain work lifecycle engine.
+* A USDC-native settlement infrastructure.
 
-## 🌟 Key Features
+In this system, work is represented as a series of verifiable state transitions rather than static listings.
 
-- **USDC Escrow Protection**: All jobs are funded upfront in USDC. Funds are only released upon work approval or through a dispute resolution process.
-- **Sequential Funding Flow**: A deterministic, multi-step process for job creation (Analysis -> Approval -> Funding) that ensures maximum security.
-- **On-chain Reputation (Reputation Registry)**: Track developer and employer statistics, including completion rates, dispute history, and total volume.
-- **DevScore NFT**: Successfully completing jobs earns developers reputation points reflected in an evolving DevScore NFT.
-- **Dispute Resolution**: Built-in mechanism to handle disagreements fairly through an optimized on-chain protocol.
-- **Modern Web3 Interface**: Built with React, Tailwind CSS, and Framer Motion for a fluid, high-fidelity experience.
+## System Overview
 
-## 🏗 Architecture
+ArcProof operates as a hard-coded execution environment for work agreements. The protocol abstracts the horizontal complexities of "hiring" into a vertical settlement stack:
+* **Deterministic Escrow Execution**: Funds are locked in a state-aware vault, releasable only upon reaching terminal success states.
+* **Onchain Work Lifecycle Engine**: Enforces a strict sequence of events (Created -> Funded -> Submitted -> Reviewed -> Finalized).
+* **USDC-Native Settlement**: Utilizes USDC as the primary accounting and settlement unit for sub-second deterministic finality.
 
-### Backend Service (`server.ts`)
-- **GitHub Verification**: Authenticates and analyzes GitHub profiles (PRs, stars, repo count) using the Octokit SDK.
-- **On-chain Indexer**: A secure polling service that monitors `JobEscrow` events and automatically synchronizes success metrics to the `ReputationRegistry`.
-- **Identity Binding**: Securely links GitHub identities to wallet addresses on-chain via a trusted indexer proxy.
+## Core Problem
 
-### Smart Contracts (`/contracts`)
-- **`JobEscrow.sol`**: The core engine managing job lifecycle, USDC deposits, approvals, and releases.
-- **`ReputationRegistry.sol`**: Stores user metrics and historical performance data, acting as the foundation for the DevScore.
-- **`DevScoreNFT.sol`**: An ERC721 token that acts as a portable resume for developers, reflecting points earned through the registry.
+Current work-related infrastructure suffers from a critical execution gap:
+* **Lifecycle Ambiguity**: No deterministic onchain enforcement of work progress or completion.
+* **Fragmented Escrow**: Escrow systems typically lack a unified state machine, leading to "orphaned" funds or manual intervention.
+* **Reputation Drift**: Reputation metrics are often decoupled from the actual financial settlement state.
+* **Dispute Inconsistency**: Resolution mechanisms are frequently offchain, subjective, or protocol-agnostic.
 
-### Frontend (`/src`)
-- **`App.tsx`**: Main application logic including dual personas (Employer/Developer) and the complex escrow funding state machine.
-- **`SequentialFundingFlow`**: A robust React component that handles the multi-transaction flow required for ERC20 approvals and escrow deposits.
-- **`wagmi.ts`**: Web3 configuration for the Arc Testnet using `wagmi` and `viem`.
+## Execution Model
 
-## 🚀 Getting Started
+The ArcProof state machine enforces a rigid lifecycle for every escrowed job:
 
-### Prerequisites
-- Node.js (v18+)
-- A Web3 wallet (e.g., MetaMask)
-- Arc Testnet USDC and Native Tokens
+**Created** → **Funded** → **Submitted** → **Reviewed** → **Finalized**
 
-### Installation
+* **State Enforcement**: Transitions are contract-enforced; a state cannot be bypassed.
+* **Deterministic Outcomes**: Each job has exactly one final state (Completed, Cancelled, or Resolved via Dispute).
+* **Zero Ambiguity**: Intermediate states are clearly defined and verifiable.
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
+## Escrow Flow
 
-2. Configure environment variables (refer to `.env.example`):
-   - `ARC_RPC_URL`: The RPC endpoint for the Arc Testnet.
-   - `INDEXER_PRIVATE_KEY`: The private key authorized to update the `ReputationRegistry`.
+The protocol mandates a precise sequence for financial commitment:
+1. **Create Escrow Job**: Define parameters and target developer.
+2. **Approve USDC**: Exact amount only; the protocol explicitly avoids unlimited approval patterns.
+3. **Fund Escrow**: Transfer USDC to the deterministic vault.
+4. **Submit Work**: Developer registers proof of execution.
+5. **Review Outcome**: Employer evaluates the submission against the agreed state.
+6. **Finalize State**: Transition to terminal state (Accepted / Rejected / Disputed Resolution).
 
-3. Start the development server:
-   ```bash
-   npm run dev
-   ```
+## Architecture
 
-3. Build for production:
-   ```bash
-   npm run build
-   ```
+### System Architecture
+```mermaid
+graph TD
+    User[User: Employer / Developer] --> Frontend[Frontend Layer]
+    Frontend --> Contracts[Smart Contracts Layer]
+    Contracts --> Arc[Arc Testnet: USDC Settlement Layer]
+```
 
-## 🛠 Tech Stack
+### State Machine Diagram
+```mermaid
+stateDiagram-v2
+    [*] --> Created
+    Created --> Funded
+    Funded --> Submitted
+    Submitted --> Reviewed
+    Reviewed --> Accepted
+    Reviewed --> Rejected
+    Reviewed --> Disputed
+    Accepted --> Finalized
+    Rejected --> Submitted: Resubmission
+    Disputed --> Resolution
+    Resolution --> Finalized
+```
 
-- **Framework**: React 19 + Vite
-- **Styling**: Tailwind CSS 4
-- **Web3**: Wagmi, Viem, Ethers
-- **Animations**: Motion (Framer Motion)
-- **Icons**: Lucide React
-- **Server**: Express (for production serving)
+### Wallet Flow Diagram
+```mermaid
+flowchart LR
+    A[Create Job] --> B[Approve USDC]
+    B --> C[Fund Escrow]
+    C --> D[Final State]
+```
 
-## 📎 Smart Contract Addresses
+## Smart Contracts
 
-Verify the integration in `src/lib/contracts.ts`.
+### JobEscrow.sol
+The core execution engine. It manages the deterministic escrow vault and enforces the job lifecycle state machine. It handles the logic for funding, work submission, and payment release based on state transitions.
 
-- **USDC**: `USDC_ADDRESS`
-- **JobEscrow**: `JOB_ESCROW_ADDRESS`
-- **ReputationRegistry**: `REPUTATION_REGISTRY_ADDRESS`
+### ReputationRegistry.sol
+An execution outcome registry. It tracks the historical state transitions of participants (e.g., success rates, dispute frequency) to provide a verifiable performance mapping based entirely on finalized settlement data. It manages the **DevScore**, a deterministic reputation scoring system updated onchain based on job execution outcomes.
+
+## Escrow Board UI
+
+The management interface is partitioned into deterministic state buckets:
+* **Active Escrows**: Jobs in Funded or Submitted states.
+* **Rejected State**: Jobs requiring resubmission or escalation.
+* **In Dispute**: Jobs currently undergoing resolution.
+* **Completed**: Jobs that have reached successful terminal settlement.
+* **Cancelled**: Jobs terminated before assignment or funding completion.
+
+## Reputation Model
+
+Reputation in ArcProof is defined as a performance state tracking system:
+* **Execution Outcome Registry**: Aggregates successful vs. failed state transitions.
+* **Performance State Tracking**: Quantifies "Work Done" as "USDC Settled."
+* **Dispute Mapping**: Tracks resolution history to identify risk profiles.
+* **DevScore Index**: A real-time execution index computed from verifiable onchain outcome data. No NFT or identity framing is used.
+
+## Arc Alignment
+
+The system is optimized for the Arc ecosystem's performance characteristics:
+* **USDC-Native Execution**: Built for the dominant settlement asset on Arc.
+* **Deterministic Settlement**: Leverages high-speed block times for sub-second updates.
+* **Arc Testnet Deployment**: Native integration with Arc chain parameters.
+* **Lifecycle Alignment**: Follows architectural patterns conducive to high-fidelity onchain execution.
+
+## UI Constraints
+
+Wallet interactions are strictly sequenced to maintain system integrity:
+1. **Create Job**: Initialize state.
+2. **Approve USDC**: Authorize exact amount.
+3. **Fund Escrow**: Lock capital.
+
+**Final State**: *Escrow Finalized. Job Registered Onchain.*
+
+## Deployment
+
+**Network**: Arc Testnet  
+**RPC Endpoint**: `https://rpc.arc.testnet`  
+
+### Contract Addresses
+* **JobEscrow**: `0xBa2B389B68E2cC6025AF235d460043c160D6bBa3`
+* **ReputationRegistry**: `0x6453D3AbbB79ed84799EA65A313FA7054a3878C7`
+* **USDC**: `0x3600000000000000000000000000000000000000`
 
 ---
-
-Built with precision on the Arc Ecosystem.
+*ArcProof: Deterministic execution for the work economy.*
