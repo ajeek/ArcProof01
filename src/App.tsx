@@ -261,6 +261,7 @@ export default function App() {
   const [selectedJobId, setSelectedJobId] = useState<bigint | null>(null);
   const [lastCreatedJobId, setLastCreatedJobId] = useState<bigint | null>(null);
   const [autoFlowJobId, setAutoFlowJobId] = useState<bigint | null>(null);
+  const [successHash, setSuccessHash] = useState<string | null>(null);
   const [isCreatingJob, setIsCreatingJob] = useState(false);
   const [allJobs, setAllJobs] = useState<bigint[]>([]);
 
@@ -621,9 +622,9 @@ export default function App() {
               <ShieldCheck className="w-12 h-12 opacity-20" />
             </div>
             <div className="space-y-4">
-              <h1 className="text-5xl font-medium tracking-tight">Onchain Trust, <span className="italic font-serif opacity-70">Verified.</span></h1>
-              <p className="text-arc-ink/50 max-w-lg mx-auto text-lg">
-                Connect your wallet to access ArcProof Reputation Layer on Arc Testnet
+              <h1 className="text-5xl font-bold tracking-tight">Deterministic Work Settlement Infrastructure</h1>
+              <p className="text-arc-ink/50 max-w-2xl mx-auto text-lg text-center">
+                Escrow work, verify execution, and settle USDC through programmable onchain state transitions with sub second deterministic finality on Arc
               </p>
             </div>
             <Button onClick={() => connect({ connector: connectors[0] })} className="px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg">
@@ -1132,8 +1133,9 @@ export default function App() {
                   <SequentialFundingFlow 
                        jobId={autoFlowJobId} 
                        compact
-                       onComplete={() => {
+                       onComplete={(txHash) => {
                          setCreationStatus('success');
+                         if (txHash) setSuccessHash(txHash);
                        }} 
                     />
                 </div>
@@ -1143,29 +1145,24 @@ export default function App() {
                     <div className="w-16 h-16 bg-emerald-500 rounded-full flex items-center justify-center mx-auto text-white shadow-xl shadow-emerald-500/20">
                       <CheckCircle2 className="w-8 h-8" />
                     </div>
-                    <h2 className="text-2xl font-bold tracking-tight text-arc-ink">Escrow Successfully Funded and Job Created</h2>
-                    <p className="text-arc-ink/50 text-sm">
-                      The job #{createdJobData.id?.toString() || lastCreatedJobId?.toString()} is now live and funded on-chain.
+                    <div className="space-y-1">
+                      <h2 className="text-[28px] font-bold tracking-tight text-arc-ink leading-tight">Escrow Finalized</h2>
+                      <p className="text-lg font-medium text-arc-ink/60">Job Registered Onchain</p>
+                    </div>
+                    <p className="text-arc-ink/40 text-[10px] font-mono tracking-widest uppercase">
+                      Local Instance #{createdJobData.id?.toString() || lastCreatedJobId?.toString()}
                     </p>
-                  </div>
-
-                  <div className="space-y-4 p-5 bg-arc-paper rounded-2xl border border-arc-line">
-                    <div className="flex justify-between items-center pb-3 border-b border-arc-line/50">
-                      <span className="text-[10px] uppercase font-bold text-arc-ink/30 tracking-widest">Title</span>
-                      <span className="text-sm font-semibold">{createdJobData.title}</span>
-                    </div>
-                    <div className="flex justify-between items-center pb-3 border-b border-arc-line/50">
-                      <span className="text-[10px] uppercase font-bold text-arc-ink/30 tracking-widest">Budget</span>
-                      <span className="text-sm font-mono font-bold">{createdJobData.amount} USDC</span>
-                    </div>
-                    <div className="flex justify-between items-center pb-3 border-b border-arc-line/50">
-                      <span className="text-[10px] uppercase font-bold text-arc-ink/30 tracking-widest">Upfront</span>
-                      <span className="text-sm font-semibold">{createdJobData.upfront}%</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-[10px] uppercase font-bold text-arc-ink/30 tracking-widest">Duration</span>
-                      <span className="text-sm font-semibold">{createdJobData.duration} Days</span>
-                    </div>
+                    
+                    {successHash && (
+                      <a 
+                        href={`https://testnet.arcscan.app/tx/${successHash}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-arc-ink/40 hover:text-arc-ink transition-colors group mx-auto pt-2"
+                      >
+                        View Transaction Reference <ExternalLink className="w-3 h-3 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                      </a>
+                    )}
                   </div>
 
                   <div className="flex flex-col gap-3">
@@ -1174,6 +1171,7 @@ export default function App() {
                         setShowJobSuccessModal(false);
                         setCreationStatus('idle');
                         setAutoFlowJobId(null);
+                        setSuccessHash(null);
                         setEmployerTab('initialize');
                       }}
                       className="w-full py-4 text-lg"
@@ -1186,6 +1184,7 @@ export default function App() {
                         setShowJobSuccessModal(false);
                         setCreationStatus('idle');
                         setAutoFlowJobId(null);
+                        setSuccessHash(null);
                         setEmployerTab('marketplace');
                       }}
                       className="w-full py-3"
@@ -1253,7 +1252,7 @@ function RefreshNFTButton({ onRefresh }: { onRefresh?: () => void }) {
   );
 }
 
-function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, onComplete: () => void, compact?: boolean }) {
+function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, onComplete: (hash?: string) => void, compact?: boolean }) {
   const { address } = useAccount();
   const queryClient = useQueryClient();
   const { data: job, refetch: refetchJob } = useReadContract({
@@ -1379,8 +1378,8 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
            const [,,,,, status] = (res as any) || [0,0,0,0,0,0];
            if (Number(status) !== 0) {
               setStep('done');
-              if (compact) onComplete();
-              else setTimeout(onComplete, 2000);
+              if (compact) onComplete(hash || undefined);
+              else setTimeout(() => onComplete(hash || undefined), 2000);
            } else if (retries > 0) {
              setTimeout(() => checkFunding(retries - 1), 2500);
            } else {

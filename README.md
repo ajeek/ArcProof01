@@ -1,20 +1,80 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# ArcProof ⚡️
 
-# Run and deploy your AI Studio app
+On-chain hiring and reputation system powered by USDC escrow-based performance metrics on the **Arc Testnet**.
 
-This contains everything you need to run your app locally.
+ArcProof bridges the gap between hiring and payment security, ensuring that developers are paid for their work and employers get the results they expect, all while building a verifiable on-chain reputation.
 
-View your app in AI Studio: https://ai.studio/apps/7ec48587-62dc-4a25-826f-e7ab52572c1d
+## 🌟 Key Features
 
-## Run Locally
+- **USDC Escrow Protection**: All jobs are funded upfront in USDC. Funds are only released upon work approval or through a dispute resolution process.
+- **Sequential Funding Flow**: A deterministic, multi-step process for job creation (Analysis -> Approval -> Funding) that ensures maximum security.
+- **On-chain Reputation (Reputation Registry)**: Track developer and employer statistics, including completion rates, dispute history, and total volume.
+- **DevScore NFT**: Successfully completing jobs earns developers reputation points reflected in an evolving DevScore NFT.
+- **Dispute Resolution**: Built-in mechanism to handle disagreements fairly through an optimized on-chain protocol.
+- **Modern Web3 Interface**: Built with React, Tailwind CSS, and Framer Motion for a fluid, high-fidelity experience.
 
-**Prerequisites:**  Node.js
+## 🏗 Architecture
 
+### Backend Service (`server.ts`)
+- **GitHub Verification**: Authenticates and analyzes GitHub profiles (PRs, stars, repo count) using the Octokit SDK.
+- **On-chain Indexer**: A secure polling service that monitors `JobEscrow` events and automatically synchronizes success metrics to the `ReputationRegistry`.
+- **Identity Binding**: Securely links GitHub identities to wallet addresses on-chain via a trusted indexer proxy.
+
+### Smart Contracts (`/contracts`)
+- **`JobEscrow.sol`**: The core engine managing job lifecycle, USDC deposits, approvals, and releases.
+- **`ReputationRegistry.sol`**: Stores user metrics and historical performance data, acting as the foundation for the DevScore.
+- **`DevScoreNFT.sol`**: An ERC721 token that acts as a portable resume for developers, reflecting points earned through the registry.
+
+### Frontend (`/src`)
+- **`App.tsx`**: Main application logic including dual personas (Employer/Developer) and the complex escrow funding state machine.
+- **`SequentialFundingFlow`**: A robust React component that handles the multi-transaction flow required for ERC20 approvals and escrow deposits.
+- **`wagmi.ts`**: Web3 configuration for the Arc Testnet using `wagmi` and `viem`.
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Node.js (v18+)
+- A Web3 wallet (e.g., MetaMask)
+- Arc Testnet USDC and Native Tokens
+
+### Installation
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   ```bash
+   npm install
+   ```
+
+2. Configure environment variables (refer to `.env.example`):
+   - `ARC_RPC_URL`: The RPC endpoint for the Arc Testnet.
+   - `INDEXER_PRIVATE_KEY`: The private key authorized to update the `ReputationRegistry`.
+
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
+
+3. Build for production:
+   ```bash
+   npm run build
+   ```
+
+## 🛠 Tech Stack
+
+- **Framework**: React 19 + Vite
+- **Styling**: Tailwind CSS 4
+- **Web3**: Wagmi, Viem, Ethers
+- **Animations**: Motion (Framer Motion)
+- **Icons**: Lucide React
+- **Server**: Express (for production serving)
+
+## 📎 Smart Contract Addresses
+
+Verify the integration in `src/lib/contracts.ts`.
+
+- **USDC**: `USDC_ADDRESS`
+- **JobEscrow**: `JOB_ESCROW_ADDRESS`
+- **ReputationRegistry**: `REPUTATION_REGISTRY_ADDRESS`
+
+---
+
+Built with precision on the Arc Ecosystem.
