@@ -19,11 +19,23 @@ contract ReputationRegistry {
         bool exists;
     }
 
+    struct EmployerProfile {
+        uint256 jobsCreated;
+        uint256 jobsFunded;
+        uint256 workSubmittedCount;
+        uint256 paymentsReleased;
+        uint256 disputesOpened;
+        uint256 disputesLost; // Disputes where dev was favored
+        uint256 totalFundedUSDC;
+        uint256 lastActiveTimestamp;
+        bool exists;
+    }
+
     struct ReputationState {
         uint8 reliabilityScore;     // 0-100
         uint8 disputeIntegrityScore; // 0-100
         uint8 activityScore;        // 0-100
-        uint8 earnedValueScore;     // 0-100
+        uint8 earnedValueScore;     // 0-100 (or FundedValue for employers)
         uint8 coreIndex;            // 0-100
         string riskProfile;         // "Low", "Medium", "High"
         string tier;                // "Rookie", "Reliable", "Proven", "Elite"
@@ -36,10 +48,21 @@ contract ReputationRegistry {
     mapping(address => string) public addressToGithub;
     mapping(string => address) public githubToAddress;
     mapping(address => DeveloperProfile) public devProfiles;
-    mapping(uint256 => bool) public jobScored; // Idempotency check
+    mapping(address => EmployerProfile) public employerProfiles;
+    mapping(uint256 => bool) public jobScored; // Idempotency check for terminal outcomes
+    mapping(uint256 => bool) public employerJobCreated; // Idempotency for created state
+    mapping(uint256 => bool) public employerJobFunded;  // Idempotency for funded state
+    mapping(uint256 => bool) public employerWorkSubmitted; // Idempotency for submitted state
 
     event ReputationUpdated(
         address indexed developer,
+        uint8 coreIndex,
+        string tier,
+        string riskProfile
+    );
+
+    event EmployerReputationUpdated(
+        address indexed employer,
         uint8 coreIndex,
         string tier,
         string riskProfile
@@ -51,6 +74,16 @@ contract ReputationRegistry {
         uint256 failedJobs,
         uint256 totalEarnedUSDC,
         uint256 disputesWon,
+        uint256 disputesLost,
+        uint256 lastActiveTimestamp
+    );
+
+    event EmployerStatsUpdated(
+        address indexed employer,
+        uint256 jobsCreated,
+        uint256 jobsFunded,
+        uint256 paymentsReleased,
+        uint256 disputesOpened,
         uint256 disputesLost,
         uint256 lastActiveTimestamp
     );
@@ -128,6 +161,11 @@ contract ReputationRegistry {
         return (coreIndex, t);
     }
 
+    function getEmployerScore(address _employer) external view returns (uint8 score, string memory tier) {
+        (uint8 coreIndex, string memory t, ) = getEmployerReputationSignals(_employer);
+        return (coreIndex, t);
+    }
+
     function updateStats(
         uint256 _jobId,
         address _developer,
@@ -158,9 +196,11 @@ contract ReputationRegistry {
 
         // Stability Points: reward consistency (up to a ceiling)
         uint256 timeSinceLast = block.timestamp - p.lastActiveTimestamp;
-        if (timeSinceLast < 14 days && timeSinceLast > 1 days) {
-            p.stabilityPoints += 10;
-        } else if (timeSinceLast >= 14 days) {
+        if (timeSinceLast < 14 days && p.lastActiveTimestamp > 0) {
+            if (timeSinceLast > 1 days) {
+                p.stabilityPoints += 10;
+            }
+        } else if (timeSinceLast >= 14 days && p.lastActiveTimestamp > 0) {
             // Decay stability if returning after long break
             p.stabilityPoints = p.stabilityPoints > 20 ? p.stabilityPoints - 20 : 0;
         }
@@ -183,6 +223,60 @@ contract ReputationRegistry {
         emit ReputationUpdated(_developer, coreIndex, tier, risk);
     }
 
+    function updateEmployerStats(
+        uint256 _jobId,
+        address _employer,
+        bool _created,
+        bool _funded,
+        bool _workSubmitted,
+        bool _released,
+        bool _disputeOpened,
+        bool _disputeLost,
+        uint256 _amount
+    ) external onlyIndexer {
+        EmployerProfile storage p = employerProfiles[_employer];
+        if (!p.exists) p.exists = true;
+
+        if (_created && !employerJobCreated[_jobId]) {
+            p.jobsCreated += 1;
+            employerJobCreated[_jobId] = true;
+        }
+        if (_funded && !employerJobFunded[_jobId]) {
+            p.jobsFunded += 1;
+            p.totalFundedUSDC += _amount;
+            employerJobFunded[_jobId] = true;
+        }
+        if (_workSubmitted && !employerWorkSubmitted[_jobId]) {
+            p.workSubmittedCount += 1;
+            employerWorkSubmitted[_jobId] = true;
+        }
+        
+        // Terminal states for a job outcome
+        if ((_released || _disputeLost) && !jobScored[_jobId]) {
+            if (_released) p.paymentsReleased += 1;
+            if (_disputeLost) p.disputesLost += 1;
+            jobScored[_jobId] = true;
+        }
+
+        if (_disputeOpened) p.disputesOpened += 1;
+
+        p.lastActiveTimestamp = block.timestamp;
+
+        (uint8 coreIndex, string memory tier, string memory risk) = getEmployerReputationSignals(_employer);
+
+        emit EmployerStatsUpdated(
+            _employer,
+            p.jobsCreated,
+            p.jobsFunded,
+            p.paymentsReleased,
+            p.disputesOpened,
+            p.disputesLost,
+            p.lastActiveTimestamp
+        );
+
+        emit EmployerReputationUpdated(_employer, coreIndex, tier, risk);
+    }
+
     function getReputationSignals(address _developer)
         public
         view
@@ -193,6 +287,19 @@ contract ReputationRegistry {
         )
     {
         ReputationState memory state = computeReputation(_developer);
+        return (state.coreIndex, state.tier, state.riskProfile);
+    }
+
+    function getEmployerReputationSignals(address _employer)
+        public
+        view
+        returns (
+            uint8 coreIndex,
+            string memory tier,
+            string memory riskProfile
+        )
+    {
+        ReputationState memory state = computeEmployerReputation(_employer);
         return (state.coreIndex, state.tier, state.riskProfile);
     }
 
@@ -214,24 +321,19 @@ contract ReputationRegistry {
             s.reliabilityScore = 60; // Starting point
         }
 
-        // 2. Dispute Integrity (20% weight) - 3-Factor Model
-        // Factors: Outcome Ratio + Severity Impact + Stability
+        // 2. Dispute Integrity (20% weight)
         uint256 totalDisputes = p.disputesWon + p.disputesLost;
         if (totalDisputes > 0) {
             uint256 outcomeScore = (p.disputesWon * 100) / totalDisputes;
-            
-            // Severity normalization: loss of high-value jobs hurts more
             uint256 potentialLoss = p.totalEarnedUSDC + p.weightedDisputeLoss;
             uint256 severityFactor = potentialLoss > 0 ? (p.weightedDisputeLoss * 100) / potentialLoss : 0;
-            
-            // Dispute Integrity calculation
             uint256 integrity = outcomeScore > severityFactor ? outcomeScore - severityFactor : 0;
             s.disputeIntegrityScore = uint8(integrity);
         } else {
             s.disputeIntegrityScore = 85; 
         }
 
-        // 3. Earned Value Score (20% weight) - Logarithmic scale
+        // 3. Earned Value Score (20% weight)
         uint256 earnings = p.totalEarnedUSDC / 1e6;
         if (earnings >= 25000) s.earnedValueScore = 100;
         else if (earnings >= 10000) s.earnedValueScore = 80;
@@ -239,15 +341,11 @@ contract ReputationRegistry {
         else if (earnings >= 1000) s.earnedValueScore = 30;
         else s.earnedValueScore = 10;
 
-        // 4. Activity Score (20% weight) - Stability + Value Balance
+        // 4. Activity Score (20% weight)
         uint256 timeSinceLast = block.timestamp - p.lastActiveTimestamp;
         uint256 recencyFactor = timeSinceLast < 30 days ? 100 : (timeSinceLast < 90 days ? 50 : 10);
-        
-        // Final activity blends recency with the stored stability points
         s.activityScore = uint8((recencyFactor * 40 + p.stabilityPoints * 60) / 100);
 
-        // RISK PROFILE COMPUTATION (Computed FIRST as per requirement)
-        // Soft band logic: weighted penalty sum
         uint256 riskPenalty = (uint256(100 - s.reliabilityScore) * 50 + 
                               uint256(100 - s.disputeIntegrityScore) * 50) / 100;
         
@@ -255,7 +353,6 @@ contract ReputationRegistry {
         else if (riskPenalty > 20) s.riskProfile = "Medium";
         else s.riskProfile = "Low";
 
-        // CORE REPUTATION INDEX (Computed SECOND)
         uint256 weightedIndex = (uint256(s.reliabilityScore) * 35 +
                                 uint256(s.disputeIntegrityScore) * 20 +
                                 uint256(s.earnedValueScore) * 25 +
@@ -263,13 +360,82 @@ contract ReputationRegistry {
         
         s.coreIndex = uint8(weightedIndex);
 
-        // TIER ASSIGNMENT (Last - UI Abstraction)
-        // Strict hierarchy: cannot be Elite if Risk is not Low
         if (keccak256(bytes(s.riskProfile)) == keccak256(bytes("Low")) && s.coreIndex >= 85 && p.completedJobs >= 10) {
             s.tier = "Elite";
-        } else if (s.coreIndex >= 65 && p.completedJobs >= 4) {
+        } else if (s.coreIndex >= 70 && p.completedJobs >= 4) {
             s.tier = "Proven";
-        } else if (s.coreIndex >= 35) {
+        } else if (s.coreIndex >= 50) {
+            s.tier = "Reliable";
+        } else {
+            s.tier = "Rookie";
+        }
+
+        return s;
+    }
+
+    function computeEmployerReputation(address _employer) public view returns (ReputationState memory) {
+        EmployerProfile memory p = employerProfiles[_employer];
+        ReputationState memory s;
+
+        if (!p.exists) {
+            s.tier = "Rookie";
+            s.riskProfile = "Low";
+            return s;
+        }
+
+        // 1. Funding Reliability (30% weight) - jobsFunded / jobsCreated
+        if (p.jobsCreated > 0) {
+            s.reliabilityScore = uint8((p.jobsFunded * 100) / p.jobsCreated);
+        } else {
+            s.reliabilityScore = 70;
+        }
+
+        // 2. Completion Fairness Ratio (40% weight) - paymentsReleased / workSubmittedCount
+        if (p.workSubmittedCount > 0) {
+            s.earnedValueScore = uint8((p.paymentsReleased * 100) / p.workSubmittedCount);
+        } else {
+            s.earnedValueScore = 85; 
+        }
+
+        // 3. Dispute Integrity (30% weight) - penalty based on dispute rate and loss ratio
+        uint256 disputeRate = p.jobsCreated > 0 ? (p.disputesOpened * 100) / p.jobsCreated : 0;
+        uint256 lossRatio = p.disputesOpened > 0 ? (p.disputesLost * 100) / p.disputesOpened : 0;
+        
+        uint256 integrity = 100;
+        if (disputeRate > 0) {
+            integrity = integrity > (disputeRate * 5) ? integrity - (disputeRate * 5) : 0;
+        }
+        if (lossRatio > 0) {
+            integrity = integrity > (lossRatio * 2) ? integrity - (lossRatio * 2) : 0;
+        }
+        s.disputeIntegrityScore = uint8(integrity);
+
+        // 4. Activity Score (Not used in coreIndex weighting for employers in this model, but tracked)
+        uint256 timeSinceLast = block.timestamp - p.lastActiveTimestamp;
+        s.activityScore = timeSinceLast < 30 days ? 100 : (timeSinceLast < 90 days ? 50 : 10);
+
+        // RISK PROFILE
+        uint256 riskPenalty = (uint256(100 - s.reliabilityScore) * 30 + 
+                              uint256(100 - s.earnedValueScore) * 40 +
+                              uint256(100 - s.disputeIntegrityScore) * 30) / 100;
+        
+        if (riskPenalty > 40) s.riskProfile = "High";
+        else if (riskPenalty > 15) s.riskProfile = "Medium";
+        else s.riskProfile = "Low";
+
+        // CORE REPUTATION INDEX
+        uint256 weightedIndex = (uint256(s.reliabilityScore) * 30 +
+                                uint256(s.earnedValueScore) * 40 +
+                                uint256(s.disputeIntegrityScore) * 30) / 100;
+        
+        s.coreIndex = uint8(weightedIndex);
+
+        // TIER ASSIGNMENT
+        if (s.coreIndex >= 85 && p.jobsFunded >= 5) {
+            s.tier = "Elite";
+        } else if (s.coreIndex >= 70 && p.jobsFunded >= 2) {
+            s.tier = "Proven";
+        } else if (s.coreIndex >= 50) {
             s.tier = "Reliable";
         } else {
             s.tier = "Rookie";
@@ -279,7 +445,7 @@ contract ReputationRegistry {
     }
 
     /**
-     * @notice Unified profile view
+     * @notice Unified profile view for developers
      */
     function getFullProfile(address user)
         external
@@ -290,6 +456,20 @@ contract ReputationRegistry {
         )
     {
         return (devProfiles[user], computeReputation(user));
+    }
+
+    /**
+     * @notice Unified profile view for employers
+     */
+    function getEmployerFullProfile(address user)
+        external
+        view
+        returns (
+            EmployerProfile memory profile,
+            ReputationState memory reputation
+        )
+    {
+        return (employerProfiles[user], computeEmployerReputation(user));
     }
 
     /**

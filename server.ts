@@ -230,6 +230,9 @@ async function startServer() {
               const [jobId, developer, amount] = parsedLog.args;
               console.log(`[Indexer] PaymentReleased details: Job ${jobId}, Dev ${developer}, Amount ${amount}`);
               
+              const jobData = await escrowContract.jobs(jobId);
+              const employer = jobData.employer;
+
               // Verify if already scored to avoid redundant txs (idempotency check)
               const alreadyScored = await registryContract.jobScored(jobId);
               if (alreadyScored) {
@@ -237,11 +240,17 @@ async function startServer() {
                  continue;
               }
 
-              console.log(`[Indexer] Sending updateStats for Job ${jobId} (Completed)...`);
+              console.log(`[Indexer] Sending updateStats and updateEmployerStats for Job ${jobId} (Completed)...`);
               const tx = await registryContract.updateStats(jobId, developer, 1, 0, amount, amount, false, false);
-              console.log(`[Indexer] Transaction sent: ${tx.hash}. Waiting for confirmation...`);
-              await tx.wait();
-              console.log(`[Indexer] Registry updated for ${developer}. Hash: ${tx.hash}`);
+              console.log(`[Indexer] Dev Stats update tx: ${tx.hash}`);
+              
+              const txEmp = await registryContract.updateEmployerStats(
+                jobId, employer, false, false, false, true, false, false, 0
+              );
+              console.log(`[Indexer] Employer Stats update tx: ${txEmp.hash}`);
+
+              await Promise.all([tx.wait(), txEmp.wait()]);
+              console.log(`[Indexer] Registry updated for Job ${jobId}.`);
             } else if (parsedLog.name === "DisputeResolved") {
               const [jobId, favorDeveloper] = parsedLog.args;
               console.log(`[Indexer] DisputeResolved details: Job ${jobId}, favorDeveloper: ${favorDeveloper}`);
@@ -254,6 +263,7 @@ async function startServer() {
 
               const jobData = await escrowContract.jobs(jobId);
               const developer = jobData.developer;
+              const employer = jobData.employer;
               const totalAmount = jobData.amount;
 
               if (developer === ethers.ZeroAddress) {
@@ -261,7 +271,7 @@ async function startServer() {
                 continue;
               }
 
-              console.log(`[Indexer] Sending updateStats for Job ${jobId} (Disputed outcome)...`);
+              console.log(`[Indexer] Sending updateStats and updateEmployerStats for Job ${jobId} (Disputed outcome)...`);
               const tx = await registryContract.updateStats(
                 jobId,
                 developer, 
@@ -272,8 +282,21 @@ async function startServer() {
                 favorDeveloper, 
                 !favorDeveloper
               );
-              await tx.wait();
-              console.log(`[Indexer] Registry updated for dispute outcome on ${developer}. Hash: ${tx.hash}`);
+              
+              const txEmp = await registryContract.updateEmployerStats(
+                jobId,
+                employer,
+                false,
+                false,
+                false,
+                favorDeveloper ? false : true, // released to employer if !favorDeveloper
+                false,
+                favorDeveloper, // lost if favorDeveloper
+                0
+              );
+
+              await Promise.all([tx.wait(), txEmp.wait()]);
+              console.log(`[Indexer] Registry updated for dispute outcome on Job ${jobId}.`);
             } else if (parsedLog.name === "WorkRejected") {
                const [jobId, timestamp, reason] = parsedLog.args;
                console.log(`[Indexer] WorkRejected detected for Job ${jobId}. Reason: ${reason}`);
@@ -289,8 +312,64 @@ async function startServer() {
                    console.error(`[Indexer] Failed to record rejection: ${err.message}`);
                  }
                }
+            } else if (parsedLog.name === "WorkSubmitted") {
+               const [jobId, proofHash] = parsedLog.args;
+               console.log(`[Indexer] WorkSubmitted detected for Job ${jobId}`);
+               
+               const jobData = await escrowContract.jobs(jobId);
+               const employer = jobData.employer;
+               
+               try {
+                 const tx = await registryContract.updateEmployerStats(
+                   jobId, employer, false, false, true, false, false, false, 0
+                 );
+                 console.log(`[Indexer] Work submission recorded for employer. Hash: ${tx.hash}`);
+               } catch (err: any) {
+                 console.error(`[Indexer] Failed to record work submission: ${err.message}`);
+               }
             } else if (parsedLog.name === "JobCreated") {
-               console.log(`[Indexer] JobCreated detected: ${parsedLog.args.jobId}`);
+               const [jobId, employer, developer, amount] = parsedLog.args;
+               console.log(`[Indexer] JobCreated detected: ${jobId} by ${employer}`);
+               
+               try {
+                 const tx = await registryContract.updateEmployerStats(
+                   jobId, employer, true, false, false, false, false, false, 0
+                 );
+                 console.log(`[Indexer] Job creation recorded for employer. Hash: ${tx.hash}`);
+               } catch (err: any) {
+                 console.error(`[Indexer] Failed to record job creation: ${err.message}`);
+               }
+            } else if (parsedLog.name === "JobFunded") {
+               const [jobId] = parsedLog.args;
+               console.log(`[Indexer] JobFunded detected: ${jobId}`);
+               
+               const jobData = await escrowContract.jobs(jobId);
+               const employer = jobData.employer;
+               const amount = jobData.amount;
+
+               try {
+                 const tx = await registryContract.updateEmployerStats(
+                   jobId, employer, false, true, false, false, false, false, amount
+                 );
+                 console.log(`[Indexer] Job funding recorded for employer. Hash: ${tx.hash}`);
+               } catch (err: any) {
+                 console.error(`[Indexer] Failed to record job funding: ${err.message}`);
+               }
+            } else if (parsedLog.name === "DisputeOpened") {
+               const [jobId, opener] = parsedLog.args;
+               console.log(`[Indexer] DisputeOpened detected for Job ${jobId} by ${opener}`);
+               
+               const jobData = await escrowContract.jobs(jobId);
+               const employer = jobData.employer;
+               
+               try {
+                 const tx = await registryContract.updateEmployerStats(
+                   jobId, employer, false, false, false, false, true, false, 0
+                 );
+                 console.log(`[Indexer] Dispute opening recorded for employer. Hash: ${tx.hash}`);
+               } catch (err: any) {
+                 console.error(`[Indexer] Failed to record dispute opening: ${err.message}`);
+               }
             }
           } catch (logErr: any) {
             console.error(`[Indexer] Failed to process log at block ${log.blockNumber}:`, logErr.message);

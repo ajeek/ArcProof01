@@ -1119,6 +1119,191 @@ export const REPUTATION_REGISTRY_ABI = [
     "inputs": [
       {
         "internalType": "address",
+        "name": "_employer",
+        "type": "address"
+      }
+    ],
+    "name": "getEmployerScore",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "score",
+        "type": "uint8"
+      },
+      {
+        "internalType": "string",
+        "name": "tier",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      }
+    ],
+    "name": "getEmployerFullProfile",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "jobsCreated",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "jobsFunded",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "workSubmittedCount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "paymentsReleased",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "disputesOpened",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "disputesLost",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "totalFundedUSDC",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "lastActiveTimestamp",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "exists",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct ReputationRegistry.EmployerProfile",
+        "name": "profile",
+        "type": "tuple"
+      },
+      {
+        "components": [
+          {
+            "internalType": "uint8",
+            "name": "reliabilityScore",
+            "type": "uint8"
+          },
+          {
+            "internalType": "uint8",
+            "name": "disputeIntegrityScore",
+            "type": "uint8"
+          },
+          {
+            "internalType": "uint8",
+            "name": "activityScore",
+            "type": "uint8"
+          },
+          {
+            "internalType": "uint8",
+            "name": "earnedValueScore",
+            "type": "uint8"
+          },
+          {
+            "internalType": "uint8",
+            "name": "coreIndex",
+            "type": "uint8"
+          },
+          {
+            "internalType": "string",
+            "name": "riskProfile",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "tier",
+            "type": "string"
+          }
+        ],
+        "internalType": "struct ReputationRegistry.ReputationState",
+        "name": "reputation",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_jobId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "_employer",
+        "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "_created",
+        "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "_funded",
+        "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "_workSubmitted",
+        "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "_released",
+        "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "_disputeOpened",
+        "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "_disputeLost",
+        "type": "bool"
+      },
+      {
+        "internalType": "uint256",
+        "name": "_amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "updateEmployerStats",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
         "name": "user",
         "type": "address"
       }

@@ -47,6 +47,7 @@ import {
 } from 'wagmi';
 import { formatUnits, parseUnits, zeroAddress, parseEventLogs } from 'viem';
 import { useQueryClient } from '@tanstack/react-query';
+import { formatDevScore } from './lib/devScore';
 import { 
   JOB_ESCROW_ADDRESS, 
   JOB_ESCROW_ABI, 
@@ -285,6 +286,14 @@ export default function App() {
     address: REPUTATION_REGISTRY_ADDRESS,
     abi: REPUTATION_REGISTRY_ABI,
     functionName: 'getFullProfile',
+    args: address ? [address] : undefined,
+    query: { enabled: !!address }
+  });
+
+  const { data: employerRegistryProfile, refetch: refetchEmployerProfile } = useReadContract({
+    address: REPUTATION_REGISTRY_ADDRESS,
+    abi: REPUTATION_REGISTRY_ABI,
+    functionName: 'getEmployerFullProfile',
     args: address ? [address] : undefined,
     query: { enabled: !!address }
   });
@@ -543,14 +552,22 @@ export default function App() {
   });
 
   const stats = useMemo(() => {
-    if (!registryProfile) return { score: 0, tier: "Rookie", profile: null };
+    if (!registryProfile) return { score: 0, profile: null };
     const [profile, reputation] = registryProfile as [any, any];
     return {
       score: reputation.coreIndex || 0,
-      tier: reputation.tier || "Rookie",
       profile: profile
     };
   }, [registryProfile]);
+
+  const employerStats = useMemo(() => {
+    if (!employerRegistryProfile) return { score: 0, profile: null };
+    const [profile, reputation] = employerRegistryProfile as [any, any];
+    return {
+      score: reputation.coreIndex || 0,
+      profile: profile
+    };
+  }, [employerRegistryProfile]);
 
   const activeJobs = useMemo(() => {
     // This will be filtered in the JobExplorer component or by passing a list
@@ -874,7 +891,9 @@ export default function App() {
                     <div className="flex justify-between items-start">
                       <div>
                         <div className="text-[11px] uppercase tracking-widest text-arc-ink/40 font-semibold mb-1">Reputation Tier</div>
-                        <div className="text-4xl font-serif italic text-arc-ink/80">{stats.tier}</div>
+                        <div className="text-4xl font-serif italic text-arc-ink/80">
+                          {activeTab === 'developer' ? formatDevScore(stats.score) : formatDevScore(employerStats.score)}
+                        </div>
                       </div>
                       <div className="bg-arc-ink/5 p-2 rounded-lg">
                         <ShieldCheck className="w-6 h-6 text-arc-ink/40" />
@@ -892,16 +911,24 @@ export default function App() {
                     </div>
                     <div className="flex justify-between items-start relative z-10">
                       <div>
-                        <div className="text-[11px] uppercase tracking-widest text-white/40 font-semibold mb-1">DevScore (Execution Index)</div>
-                        <div className="text-5xl font-mono">{stats.score}</div>
+                        <div className="text-[11px] uppercase tracking-widest text-white/40 font-semibold mb-1">
+                          {activeTab === 'developer' ? "DevScore (Execution Index)" : "EmployerScore (Trust Index)"}
+                        </div>
+                        <div className="text-5xl font-mono">
+                          {activeTab === 'developer' ? formatDevScore(stats.score) : formatDevScore(employerStats.score)}
+                        </div>
                       </div>
                       <Badge className={cn(
                         "text-[10px] py-1",
-                        (registryProfile as any)?.reputation?.riskProfile === 'Low' ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" :
-                        (registryProfile as any)?.reputation?.riskProfile === 'Medium' ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
+                        (activeTab === 'developer' ? 
+                          (registryProfile as any)?.reputation?.riskProfile === 'Low' : 
+                          (employerRegistryProfile as any)?.reputation?.riskProfile === 'Low') ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" :
+                        (activeTab === 'developer' ?
+                          (registryProfile as any)?.reputation?.riskProfile === 'Medium' :
+                          (employerRegistryProfile as any)?.reputation?.riskProfile === 'Medium') ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
                         "bg-red-500/20 text-red-300 border-red-500/30"
                       )}>
-                        {(registryProfile as any)?.reputation?.riskProfile || 'Unknown'} Risk Profile
+                        Reputation Verified
                       </Badge>
                     </div>
                     <div className="mt-8 flex items-center gap-2 relative z-10">
@@ -1687,6 +1714,9 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: 
              <div className="flex items-center gap-3">
                <ShieldCheck className="w-5 h-5 text-arc-ink" />
                <h2 className="text-xl font-medium tracking-tight">Reputation Matrix</h2>
+               <Badge className="bg-arc-ink text-white normal-case px-2.5 py-0.5">
+                 {formatDevScore(reputation?.coreIndex)}
+               </Badge>
                <button 
                  onClick={handleManualRefresh}
                  disabled={isRefreshing}
@@ -2362,6 +2392,22 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
     }
   };
 
+  const { data: devRegistryProfile } = useReadContract({
+    address: REPUTATION_REGISTRY_ADDRESS,
+    abi: REPUTATION_REGISTRY_ABI,
+    functionName: 'getFullProfile',
+    args: developer && developer !== zeroAddress ? [developer] : undefined,
+    query: { enabled: !!developer && developer !== zeroAddress }
+  });
+
+  const { data: empRegistryProfile } = useReadContract({
+    address: REPUTATION_REGISTRY_ADDRESS,
+    abi: REPUTATION_REGISTRY_ABI,
+    functionName: 'getEmployerFullProfile',
+    args: employer && employer !== zeroAddress ? [employer] : undefined,
+    query: { enabled: !!employer && employer !== zeroAddress }
+  });
+
   const isEmployer = employer === viewerAddress;
   const isDeveloper = developer === viewerAddress;
 
@@ -2573,8 +2619,13 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
           </div>
         )}
         <div className="flex justify-between items-end">
-           <div className="text-[10px] text-arc-ink/40 font-mono">By {employer.slice(0, 6)}...</div>
-           <div className="text-sm font-mono font-bold text-arc-ink/80">{Math.floor(Number(formatUnits(amount, 6))).toLocaleString()} USDC</div>
+           <div className="flex items-center gap-1.5 overflow-hidden">
+             <div className="text-[10px] text-arc-ink/40 font-mono shrink-0">By {(employer as string).slice(0, 6)}</div>
+             <Badge className="bg-arc-ink/5 text-arc-ink/40 border-none px-1.5 py-0 scale-90 origin-left">
+               {formatDevScore((empRegistryProfile as any)?.reputation?.coreIndex)}
+             </Badge>
+           </div>
+           <div className="text-sm font-mono font-bold text-arc-ink/80 shrink-0">{Math.floor(Number(formatUnits(amount as bigint, 6))).toLocaleString()} USDC</div>
         </div>
       </Card>
     );
@@ -2632,11 +2683,25 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-arc-paper rounded-2xl border border-arc-line italic">
           <div className="space-y-1">
             <div className="text-[10px] font-bold text-arc-ink/40 uppercase tracking-widest">Employer</div>
-            <div className="text-xs font-mono">{employer as string}</div>
+            <div className="text-xs font-mono flex items-center gap-2">
+              <span>{(employer as string).slice(0, 8)}...{(employer as string).slice(-6)}</span>
+              <Badge className="bg-arc-ink text-white">
+                {formatDevScore((empRegistryProfile as any)?.reputation?.coreIndex)}
+              </Badge>
+            </div>
           </div>
           <div className="space-y-1">
             <div className="text-[10px] font-bold text-arc-ink/40 uppercase tracking-widest">Developer</div>
-            <div className="text-xs font-mono">{developer === zeroAddress ? "NOT ASSIGNED" : (developer as string)}</div>
+            <div className="text-xs font-mono">
+              {developer === zeroAddress ? "NOT ASSIGNED" : (
+                <div className="flex items-center gap-2">
+                  <span>{(developer as string).slice(0, 8)}...{(developer as string).slice(-6)}</span>
+                  <Badge className="bg-arc-ink text-white">
+                    {formatDevScore((devRegistryProfile as any)?.reputation?.coreIndex)}
+                  </Badge>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
