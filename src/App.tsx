@@ -4,6 +4,7 @@ import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ShieldCheck, 
+  XCircle,
   Github, 
   Wallet, 
   Briefcase, 
@@ -251,7 +252,8 @@ export default function App() {
   const [employerTab, setEmployerTab] = useState<'initialize' | 'marketplace'>('initialize');
   const [showJobSuccessModal, setShowJobSuccessModal] = useState(false);
   const [createdJobData, setCreatedJobData] = useState<any>(null);
-  const [creationStatus, setCreationStatus] = useState<'idle' | 'creating' | 'funding' | 'success'>('idle');
+  const [creationStatus, setCreationStatus] = useState<'idle' | 'creating' | 'funding' | 'success' | 'error'>('idle');
+  const [creationError, setCreationError] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem('arc_active_mode', activeTab);
@@ -387,11 +389,15 @@ export default function App() {
       setCreatedJobData((prev: any) => ({ ...prev, ...params, id }));
       setCreationStatus('funding');
     }
-  }, []);
+    // Refresh job list
+    refetchJobCount();
+    queryClient.invalidateQueries({ queryKey: [JOB_ESCROW_ADDRESS] });
+  }, [refetchJobCount, queryClient]);
 
   const handleJobCreationStart = useCallback((params: any) => {
     setCreatedJobData(params);
     setCreationStatus('creating');
+    setCreationError(null);
     setShowJobSuccessModal(true);
   }, []);
 
@@ -585,15 +591,21 @@ export default function App() {
               <div className="flex flex-col items-end mr-2">
                 <span className="text-[10px] font-bold text-arc-ink/40 uppercase tracking-widest">Balance</span>
                 <span className="text-xs font-mono font-medium">
-                  {usdcBalance ? formatUnits(usdcBalance as bigint, 6) : "0.00"} USDC
+                  {usdcBalance ? Math.floor(Number(formatUnits(usdcBalance as bigint, 6))).toLocaleString() : "0"} USDC
                 </span>
               </div>
               <button 
                 onClick={() => disconnect()}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-arc-ink/5 border border-arc-line hover:bg-arc-ink/10 transition-all"
+                className="group flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-arc-ink/5 border border-arc-line hover:bg-red-50 hover:border-red-100 transition-all relative overflow-hidden"
               >
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                {address?.slice(0, 6)}...{address?.slice(-4)}
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse group-hover:bg-red-500 group-hover:animate-none" />
+                <span className="transition-all duration-200 group-hover:opacity-0 group-hover:translate-y-[-10px]">
+                  {address?.slice(0, 6)}...{address?.slice(-4)}
+                </span>
+                <span className="absolute inset-x-0 inset-y-0 flex items-center justify-center gap-2 text-red-600 font-bold uppercase text-[10px] tracking-widest opacity-0 translate-y-[10px] transition-all duration-200 group-hover:opacity-100 group-hover:translate-y-0">
+                  <X className="w-3.5 h-3.5" />
+                  Disconnect
+                </span>
               </button>
             </div>
           )}
@@ -624,7 +636,7 @@ export default function App() {
             <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
               <div className="space-y-2">
                 <h1 className="text-4xl font-medium tracking-tight text-arc-ink leading-tight">
-                  {activeTab === 'developer' ? "Developer Identity" : "Talent Marketplace"}
+                  {activeTab === 'developer' ? "Developer Identity" : "Escrow Board"}
                   <span className="italic font-serif opacity-70 ml-2">Console.</span>
                 </h1>
                 <p className="text-arc-ink/60">
@@ -861,7 +873,7 @@ export default function App() {
                        )}>
                          {(registryProfile as any)?.reputation?.riskProfile || 'Unknown'} Risk
                        </Badge>
-                       <span className="text-[10px] font-medium text-arc-ink/40">Marketplace Profile</span>
+                       <span className="text-[10px] font-medium text-arc-ink/40">Escrow Profile</span>
                     </div>
                   </Card>
 
@@ -929,7 +941,7 @@ export default function App() {
                             employerTab === 'initialize' ? "bg-arc-ink text-white shadow-lg" : "text-arc-ink/40 hover:bg-arc-ink/5"
                           )}
                         >
-                          Post a USDC Job
+                          Create Escrow Job
                         </button>
                         <button 
                           onClick={() => setEmployerTab('marketplace')}
@@ -938,7 +950,7 @@ export default function App() {
                             employerTab === 'marketplace' ? "bg-arc-ink text-white shadow-lg" : "text-arc-ink/40 hover:bg-arc-ink/5"
                           )}
                         >
-                          Your Marketplace
+                          Escrow Board
                         </button>
                       </div>
 
@@ -964,6 +976,7 @@ export default function App() {
                               onJobCreated={handleJobCreated} 
                               onCreating={setIsCreatingJob}
                               onCreationStart={handleJobCreationStart}
+                              onCreationError={setCreationError}
                             />
                           </motion.div>
                         ) : (
@@ -1069,30 +1082,60 @@ export default function App() {
               {creationStatus === 'creating' ? (
                 <div className="text-center space-y-6 py-4">
                   <div className="w-16 h-16 bg-arc-ink/5 rounded-full flex items-center justify-center mx-auto text-arc-ink border border-arc-line">
-                    <Loader2 className="w-8 h-8 animate-spin" />
+                    {creationError ? <XCircle className="w-8 h-8 text-red-500" /> : <Loader2 className="w-8 h-8 animate-spin" />}
                   </div>
                   <div className="space-y-2">
-                    <h2 className="text-2xl font-bold tracking-tight text-arc-ink">Escrow Creation in Progress...</h2>
+                    <h2 className="text-2xl font-bold tracking-tight text-arc-ink">
+                      {creationError ? "Creation Failed" : "Escrow Creation in Progress..."}
+                    </h2>
                     <p className="text-arc-ink/50 text-sm">
-                      Please confirm the transaction in your wallet to initialize the job on-chain.
+                      {creationError || "Please confirm the transaction in your wallet to initialize the job on-chain."}
                     </p>
                   </div>
+                  {creationError && (
+                    <Button 
+                      onClick={() => {
+                        setShowJobSuccessModal(false);
+                        setCreationStatus('idle');
+                      }}
+                      className="w-full"
+                    >
+                      Dismiss
+                    </Button>
+                  )}
                 </div>
-               ) : creationStatus === 'funding' ? (
+               ) : creationStatus === 'error' ? (
+                 <div className="text-center space-y-6 py-4">
+                   <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto text-red-500 border border-red-100">
+                     <XCircle className="w-8 h-8" />
+                   </div>
+                   <div className="space-y-2">
+                     <h2 className="text-xl font-bold tracking-tight text-arc-ink">Process Interrupted</h2>
+                     <p className="text-arc-ink/50 text-sm">{creationError || "An error occurred during the escrow setup."}</p>
+                   </div>
+                   <Button 
+                     onClick={() => {
+                       setShowJobSuccessModal(false);
+                       setCreationStatus('idle');
+                     }}
+                     className="w-full"
+                   >
+                     Close
+                   </Button>
+                 </div>
+               ) : creationStatus === 'funding' && autoFlowJobId ? (
                 <div className="space-y-4">
                   <div className="text-center space-y-2">
                     <h2 className="text-xl font-bold tracking-tight text-arc-ink">Escrow Funding</h2>
                     <p className="text-arc-ink/50 text-xs italic">USDC Approval & Deposit</p>
                   </div>
-                  {autoFlowJobId && (
-                    <SequentialFundingFlow 
-                         jobId={autoFlowJobId} 
-                         compact
-                         onComplete={() => {
-                           setCreationStatus('success');
-                         }} 
-                      />
-                  )}
+                  <SequentialFundingFlow 
+                       jobId={autoFlowJobId} 
+                       compact
+                       onComplete={() => {
+                         setCreationStatus('success');
+                       }} 
+                    />
                 </div>
               ) : (
                 <>
@@ -1227,89 +1270,62 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
     args: address ? [address, JOB_ESCROW_ADDRESS] : undefined,
   });
 
+  const { data: balance, refetch: refetchBalance } = useReadContract({
+    address: USDC_ADDRESS,
+    abi: USDC_ABI,
+    functionName: 'balanceOf',
+    args: address ? [address] : undefined,
+  });
+
   const { writeContract, data: hash, isPending, status: writeStatus, error: writeError } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+  const { isLoading: isConfirming, isSuccess, error: confirmError } = useWaitForTransactionReceipt({ hash });
 
-  const [step, setStep] = useState<'analyzing' | 'approving' | 'funding' | 'done' | 'error'>('analyzing');
+  // Deterministic Step Machine
+  const [step, setStep] = useState<'idle' | 'analyzing' | 'approving' | 'awaiting_allowance' | 'funding' | 'awaiting_funding' | 'done' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasTriggered, setHasTriggered] = useState(false);
+  const [lastHandledHash, setLastHandledHash] = useState<string | null>(null);
 
+  // 1. Initial State Analysis
   useEffect(() => {
-    if (!job || allowance === undefined) return;
+    if (!job || allowance === undefined || balance === undefined) return;
     const [,, amount,, , status] = job as any;
     
-    // If job is already funded, we're done
-    if (Number(status) !== 0) {
-      if (step !== 'done') {
+    if (step === 'idle') {
+      if (Number(status) !== 0) {
         setStep('done');
-        // Instantly notify completion if compact (in modal) for faster transition
-        if (compact) {
-          onComplete();
-        } else {
-          const timer = setTimeout(onComplete, 2000);
-          return () => clearTimeout(timer);
-        }
+      } else {
+        setStep('analyzing');
       }
-      return;
     }
 
     if (step === 'analyzing') {
+      console.log(`[Escrow Flow] Analyzing: Balance=${balance}, Allowance=${allowance}, Required=${amount}`);
+      // Check balance first
+      if ((balance as bigint) < (amount as bigint)) {
+        setStep('error');
+        setErrorMessage(`Insufficient USDC balance. Found ${formatUnits(balance as bigint, 6)}, need ${formatUnits(amount as bigint, 6)}.`);
+        return;
+      }
+
       if ((allowance as bigint) < (amount as bigint)) {
         setStep('approving');
       } else {
         setStep('funding');
       }
     }
-  }, [job, allowance, step, onComplete, compact]);
+  }, [job, allowance, balance, step]);
 
-  // Reset trigger state on step change
+  // 2. Action Triggering (Strictly once per step)
   useEffect(() => {
-    setHasTriggered(false);
-  }, [step]);
-
-  // Handle transaction success
-  useEffect(() => {
-    if (isSuccess) {
-      queryClient.invalidateQueries();
-      if (step === 'approving') {
-         refetchAllowance().then(() => setStep('funding'));
-      } else if (step === 'funding') {
-         // Explicitly wait for indexer/node to catch the state before transitioning modal
-         refetchJob().then((res) => {
-           const [,,, status] = (res.data as any) || [0,0,0,0];
-           if (Number(status) !== 0) {
-              setStep('done');
-              setTimeout(() => {
-                if (compact) onComplete();
-              }, 1500);
-           } else {
-              // Retry once after a short delay if it's still 0
-              setTimeout(() => {
-                refetchJob().then(() => {
-                  setStep('done');
-                  if (compact) onComplete();
-                });
-              }, 2000);
-           }
-         });
-      }
-    }
-  }, [isSuccess, step, refetchAllowance, refetchJob, compact, onComplete, queryClient]);
-
-  useEffect(() => {
-    if (writeError) {
-      setStep('error');
-    }
-  }, [writeError]);
-
-  // Trigger actions automatically
-  useEffect(() => {
-    if (isPending || isConfirming || step === 'done' || step === 'analyzing' || step === 'error') return;
-    if (writeStatus === 'pending') return; // Awaiting wallet
-    if (hasTriggered) return; // Already triggered for this step
+    if (isPending || isConfirming || step === 'done' || step === 'analyzing' || step === 'error' || step === 'idle') return;
+    if (step === 'awaiting_allowance' || step === 'awaiting_funding') return;
+    if (writeStatus === 'pending') return; 
+    if (hasTriggered) return;
 
     if (step === 'approving' && job) {
       const [,, amount] = job as any;
-      console.log("[AutoFlow] Triggering Approval...");
+      console.log(`[Escrow Flow] TRIGGER: approve(${formatUnits(amount, 6)})`);
       setHasTriggered(true);
       writeContract({
         address: USDC_ADDRESS,
@@ -1318,7 +1334,7 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
         args: [JOB_ESCROW_ADDRESS, amount],
       } as any);
     } else if (step === 'funding') {
-      console.log("[AutoFlow] Triggering Funding...");
+      console.log(`[Escrow Flow] TRIGGER: fundJob(${jobId})`);
       setHasTriggered(true);
       writeContract({
         address: JOB_ESCROW_ADDRESS,
@@ -1327,7 +1343,70 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
         args: [BigInt(jobId.toString())],
       } as any);
     }
-  }, [step, job, isPending, isConfirming, writeStatus, writeContract, jobId, writeError, hasTriggered]);
+  }, [step, job, isPending, isConfirming, writeStatus, writeContract, jobId, hasTriggered]);
+
+  // 3. Success Lifecycle & State Progression
+  useEffect(() => {
+    if (isSuccess && hash && hash !== lastHandledHash) {
+      setLastHandledHash(hash as string);
+      setHasTriggered(false); // Reset trigger for NEXT step
+      queryClient.invalidateQueries();
+      
+      if (step === 'approving') {
+         console.log("[Escrow Flow] SUCCESS: Approval confirmed.");
+         setStep('awaiting_allowance');
+         const checkAllowance = async (retries = 3) => {
+           console.log(`[Escrow Flow] Syncing allowance... (Retries left: ${retries})`);
+           const { data: newAllowance } = await refetchAllowance();
+           const [,, amount] = job as any;
+           if (newAllowance !== undefined && (newAllowance as bigint) >= (amount as bigint)) {
+             setStep('funding');
+           } else if (retries > 0) {
+             setTimeout(() => checkAllowance(retries - 1), 2000);
+           } else {
+             setStep('error');
+             setErrorMessage("USDC approval not reflected on-chain yet. Try clicking retry.");
+           }
+         };
+         checkAllowance();
+      } else if (step === 'funding') {
+         console.log("[Escrow Flow] SUCCESS: Job funded.");
+         setStep('awaiting_funding');
+         
+         const checkFunding = async (retries = 3) => {
+           console.log(`[Escrow Flow] Syncing job status... (Retries left: ${retries})`);
+           const { data: res } = await refetchJob();
+           const [,,,,, status] = (res as any) || [0,0,0,0,0,0];
+           if (Number(status) !== 0) {
+              setStep('done');
+              if (compact) onComplete();
+              else setTimeout(onComplete, 2000);
+           } else if (retries > 0) {
+             setTimeout(() => checkFunding(retries - 1), 2500);
+           } else {
+             setStep('error');
+             setErrorMessage("Escrow state not updated after funding. Please refresh.");
+           }
+         };
+         checkFunding();
+      }
+    }
+  }, [isSuccess, hash, lastHandledHash, step, refetchAllowance, refetchJob, compact, onComplete, queryClient, job]);
+
+  // Handle Error path
+  useEffect(() => {
+    if (writeError) {
+      console.error("[Escrow Flow] Write Error:", writeError);
+      setStep('error');
+      const err = (writeError as any).shortMessage || writeError.message;
+      setErrorMessage(err.includes('User rejected') ? "Transaction was rejected in your wallet." : `Failed: ${err}`);
+    }
+    if (confirmError) {
+      console.error("[Escrow Flow] Confirm Error:", confirmError);
+      setStep('error');
+      setErrorMessage("The transaction was submitted but failed on-chain.");
+    }
+  }, [writeError, confirmError]);
 
   return (
     <div className={cn(
@@ -1335,7 +1414,7 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
       compact ? "p-5 bg-arc-ink text-white" : "p-6 glass bg-arc-ink text-white card-border"
     )}>
        <div className="absolute top-0 right-0 p-4 opacity-10">
-         {step === 'error' ? <CircleAlert className="w-10 h-10" /> : <Zap className="w-10 h-10" />}
+         {step === 'error' ? <XCircle className="w-10 h-10" /> : <Zap className="w-10 h-10" />}
        </div>
        <div className="flex flex-col gap-4">
          <div className="flex items-center gap-3">
@@ -1343,16 +1422,23 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
              {step === 'done' ? (
                <CircleCheck className="w-4 h-4 text-emerald-400" />
              ) : step === 'error' ? (
-               <CircleAlert className="w-4 h-4" />
+               <CircleAlert className="w-4 h-4 text-red-500" />
              ) : (
-               <Loader2 className="w-4 h-4 animate-spin" />
+               <Loader2 className="w-4 h-4 animate-spin text-arc-accent" />
              )}
            </div>
-           <div>
-             <h4 className="text-sm font-semibold">
-               {step === 'error' ? "Payment Paused" : "Escrow Funding Process"}
-             </h4>
-             <p className="text-[10px] text-white/40 uppercase tracking-widest font-mono">Job #{jobId.toString()}</p>
+           <div className="flex-1">
+             <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold">
+                  {step === 'error' ? "Process Interrupted" : "On-chain Settlement"}
+                </h4>
+                {balance !== undefined && job && (
+                   <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-white/60 font-mono">
+                     {formatUnits(balance as bigint, 6)} / {formatUnits((job as any)[2], 6)} USDC
+                   </span>
+                )}
+             </div>
+             <p className="text-[10px] text-white/40 uppercase tracking-widest font-mono">Phase: {step.replace('_', ' ')}</p>
            </div>
          </div>
          
@@ -1360,44 +1446,49 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
             <div className={cn("flex-1 h-1 rounded-full bg-white/10 overflow-hidden relative")}>
                <motion.div 
                  initial={{ width: 0 }}
-                 animate={{ width: step === 'approving' ? '50%' : step === 'funding' || step === 'done' ? '100%' : '0%' }}
+                 animate={{ width: step === 'approving' || step === 'awaiting_allowance' ? '50%' : step === 'funding' || step === 'awaiting_funding' || step === 'done' ? '100%' : '0%' }}
                  className="absolute inset-0 bg-white"
                />
             </div>
             <div className={cn("flex-1 h-1 rounded-full bg-white/10 overflow-hidden relative")}>
                <motion.div 
                  initial={{ width: 0 }}
-                 animate={{ width: step === 'funding' ? '50%' : step === 'done' ? '100%' : '0%' }}
+                 animate={{ width: step === 'funding' || step === 'awaiting_funding' ? '50%' : step === 'done' ? '100%' : '0%' }}
                  className="absolute inset-0 bg-white"
                />
             </div>
          </div>
          
-         <div className="flex items-center justify-between min-h-[1.5rem]">
-            <p className="text-[11px] font-medium text-white/70">
-              {step === 'analyzing' && "Analyzing contract state..."}
-              {step === 'approving' && (isConfirming ? "Confirming approval..." : "Approve USDC spending")}
-              {step === 'funding' && (isConfirming ? "Confirming deposit..." : "Sign funding transaction")}
-              {step === 'done' && "Escrow successfully funded!"}
-              {step === 'error' && "Transaction rejected or failed."}
+         <div className="flex items-center justify-between min-h-[1.5rem] gap-4">
+            <p className={cn("text-[11px] font-medium leading-tight line-clamp-2", step === 'error' ? "text-red-400" : "text-white/70")}>
+               {step === 'analyzing' && "Analyzing wallet state and allowance..."}
+               {step === 'approving' && (isConfirming ? "Confirming Spent Approval..." : "Awaiting USDC Approval Signature...")}
+               {step === 'awaiting_allowance' && "Confirming allowance on-chain..."}
+               {step === 'funding' && (isConfirming ? "Registering Escrow Deposit..." : "Awaiting Funding Signature...")}
+               {step === 'awaiting_funding' && "Finalizing on-chain state..."}
+               {step === 'done' && "Success! Job is now fully funded."}
+               {errorMessage}
             </p>
             {step === 'error' && (
-              <div className="flex gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setStep('analyzing')} className="text-white hover:bg-white/10 text-[10px]">
-                  Retry Flow
-                </Button>
-                <Button variant="ghost" size="sm" onClick={onComplete} className="text-white/60 hover:bg-white/10 text-[10px]">
-                  Dismiss
+              <div className="flex gap-2 flex-shrink-0">
+                <Button variant="ghost" size="sm" onClick={() => {
+                  setStep('idle');
+                  setErrorMessage(null);
+                  setHasTriggered(false);
+                  queryClient.invalidateQueries();
+                }} className="text-white hover:bg-white/10 text-[10px] h-7 border border-white/20">
+                  Retry
                 </Button>
               </div>
             )}
          </div>
        </div>
     </div>
+
   );
 }
 
-function EmployerPanel({ onJobCreated, onCreating, onCreationStart }: { onJobCreated: (id: bigint, params?: any) => void, onCreating: (state: boolean) => void, onCreationStart: (params: any) => void }) {
+function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationError }: { onJobCreated: (id: bigint, params?: any) => void, onCreating: (state: boolean) => void, onCreationStart: (params: any) => void, onCreationError: (error: string) => void }) {
   const [devAddress, setDevAddress] = useState<string>(zeroAddress);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -1422,7 +1513,7 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart }: { onJobCre
     if (upfront > maxUpfront) setUpfront(0);
   }, [maxUpfront, upfront]);
 
-  const { writeContract, data: hash, isPending, isSuccess: isWriteSuccess } = useWriteContract();
+  const { writeContract, data: hash, isPending, error: writeError } = useWriteContract();
   const { data: receipt, isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
 
   useEffect(() => {
@@ -1430,6 +1521,13 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart }: { onJobCre
       onCreating(true);
     }
   }, [isPending, isConfirming, onCreating]);
+
+  useEffect(() => {
+    if (writeError) {
+      onCreating(false);
+      onCreationError(writeError.message || "Transaction failed");
+    }
+  }, [writeError, onCreating, onCreationError]);
 
   // Extract jobId from receipt for immediate flow
   useEffect(() => {
@@ -1483,7 +1581,7 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart }: { onJobCre
   return (
     <Card className="space-y-6">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold tracking-tight">Post a USDC Job</h3>
+        <h3 className="font-semibold tracking-tight">Create Escrow Job</h3>
         <Badge className="bg-arc-ink/5 text-arc-ink/40">USDC Settlement</Badge>
       </div>
 
@@ -1639,7 +1737,7 @@ function DeveloperProfile({ address, allJobs, onSelect }: { address: `0x${string
              </div>
              <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
                 <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Total Earned</div>
-                <div className="text-xl font-mono">${profile ? formatUnits(profile.totalEarnedUSDC, 6) : "0"}</div>
+                <div className="text-xl font-mono">${profile ? Math.floor(Number(formatUnits(profile.totalEarnedUSDC, 6))).toLocaleString() : "0"}</div>
              </div>
              <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
                 <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Won</div>
@@ -1728,23 +1826,109 @@ function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect }: { key?: stri
 }
 
 function JobExplorer({ address, role, allJobs, onSelect }: { address: `0x${string}`, role: 'developer' | 'employer', allJobs: bigint[], onSelect: (id: bigint) => void }) {
+  if (role === 'employer') {
+    return (
+      <div className="space-y-10">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <h2 className="text-xl font-medium tracking-tight">Escrow Board</h2>
+            <Badge className="bg-arc-ink/5 text-arc-ink/40">Employer Admin</Badge>
+          </div>
+        </div>
+
+        <div className="space-y-12">
+          <EmployerJobSection 
+            title="Active Job" 
+            allJobs={allJobs} 
+            address={address} 
+            statuses={[0, 1, 2, 3, 7]} 
+            onSelect={onSelect} 
+          />
+          <EmployerJobSection 
+            title="Cancelled Job" 
+            allJobs={allJobs} 
+            address={address} 
+            statuses={[6]} 
+            onSelect={onSelect} 
+          />
+          <EmployerJobSection 
+            title="Completed Job" 
+            allJobs={allJobs} 
+            address={address} 
+            statuses={[4]} 
+            onSelect={onSelect} 
+          />
+          <EmployerJobSection 
+            title="In Dispute" 
+            allJobs={allJobs} 
+            address={address} 
+            statuses={[5]} 
+            onSelect={onSelect} 
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <h2 className="text-xl font-medium tracking-tight">{role === 'employer' ? "Your Marketplace" : "Available Opportunities"}</h2>
-          <Badge className="bg-arc-ink/5 text-arc-ink/40">{role === 'employer' ? "Employer Admin" : "Public Discovery"}</Badge>
+          <h2 className="text-xl font-medium tracking-tight">Available Opportunities</h2>
+          <Badge className="bg-arc-ink/5 text-arc-ink/40">Public Discovery</Badge>
         </div>
       </div>
 
       <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {allJobs.map(id => (
-            <JobDiscoveryFilter key={id.toString()} jobId={id} viewerAddress={address} role={role} onSelect={onSelect} />
+            <JobDiscoveryFilter key={id.toString()} jobId={id} viewerAddress={address} role="developer" onSelect={onSelect} />
           ))}
         </div>
       </div>
     </div>
+  );
+}
+
+function EmployerJobSection({ title, allJobs, address, statuses, onSelect }: { title: string, allJobs: bigint[], address: `0x${string}`, statuses: number[], onSelect: (id: bigint) => void }) {
+  // We need to count matching jobs to show/hide empty sections or just show empty state
+  return (
+    <div className="space-y-6">
+      <h3 className="text-sm font-bold text-arc-ink/40 uppercase tracking-[0.2em] flex items-center gap-3">
+        <div className="h-[1px] flex-1 bg-arc-line" />
+        {title}
+        <div className="h-[1px] flex-1 bg-arc-line" />
+      </h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {allJobs.map(id => (
+          <JobStatusFilter key={id.toString()} jobId={id} viewerAddress={address} targetStatuses={statuses} onSelect={onSelect} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function JobStatusFilter({ jobId, viewerAddress, targetStatuses, onSelect }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, targetStatuses: number[], onSelect: (id: bigint) => void }) {
+  const { data: job } = useReadContract({
+    address: JOB_ESCROW_ADDRESS,
+    abi: JOB_ESCROW_ABI,
+    functionName: 'jobs',
+    args: [jobId],
+  });
+
+  if (!job || job[0] === zeroAddress) return null;
+  const [employer, , , , , status] = job as any;
+
+  if (employer !== viewerAddress) return null;
+  if (!targetStatuses.includes(Number(status))) return null;
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+    >
+      <JobCard jobId={jobId} viewerAddress={viewerAddress} compact onSelect={onSelect} role="employer" />
+    </motion.div>
   );
 }
 
@@ -2393,7 +2577,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
         )}
         <div className="flex justify-between items-end">
            <div className="text-[10px] text-arc-ink/40 font-mono">By {employer.slice(0, 6)}...</div>
-           <div className="text-sm font-mono font-bold text-arc-ink/80">{formatUnits(amount, 6)} USDC</div>
+           <div className="text-sm font-mono font-bold text-arc-ink/80">{Math.floor(Number(formatUnits(amount, 6))).toLocaleString()} USDC</div>
         </div>
       </Card>
     );
@@ -2425,7 +2609,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
           </div>
         </div>
         <div className="text-right">
-          <div className="text-2xl font-mono font-bold text-arc-ink">{formatUnits(amount as bigint, 6)} USDC</div>
+          <div className="text-2xl font-mono font-bold text-arc-ink">{Math.floor(Number(formatUnits(amount as bigint, 6))).toLocaleString()} USDC</div>
           <div className="text-[10px] text-arc-ink/40 uppercase font-black">{upfrontPercent.toString()}% Upfront Settlement</div>
         </div>
       </div>
