@@ -1,4 +1,4 @@
-import { http, createConfig } from 'wagmi';
+import { http, createConfig, webSocket, fallback } from 'wagmi';
 import { mainnet } from 'wagmi/chains';
 import { type Chain } from 'viem';
 
@@ -7,7 +7,10 @@ export const arcTestnet = {
   name: 'Arc Testnet',
   nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
   rpcUrls: {
-    default: { http: ['https://rpc.testnet.arc.network'] },
+    default: { 
+      http: ['https://rpc.testnet.arc.network'],
+      webSocket: ['wss://rpc.testnet.arc.network']
+    },
   },
   blockExplorers: {
     default: { name: 'ArcScan', url: 'https://testnet.arcscan.app' },
@@ -18,7 +21,10 @@ export const arcTestnet = {
 export const config = createConfig({
   chains: [arcTestnet, mainnet],
   transports: {
-    [arcTestnet.id]: http(),
+    [arcTestnet.id]: fallback([
+      webSocket('wss://rpc.testnet.arc.network'),
+      http('https://rpc.testnet.arc.network')
+    ]),
     [mainnet.id]: http(),
   },
 });

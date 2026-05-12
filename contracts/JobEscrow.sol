@@ -116,7 +116,7 @@ contract JobEscrow is ReentrancyGuard {
         uint256 balanceAfter = USDC.balanceOf(address(this));
 
         // 3. Enforce balance confirmation after transfer
-        if (balanceAfter < balanceBefore + job.amount) revert FundingFailed();
+        if (balanceAfter != balanceBefore + job.amount) revert FundingFailed();
 
         job.status = JobStatus.Funded;
 
@@ -161,16 +161,17 @@ contract JobEscrow is ReentrancyGuard {
 
         if (activeJobsCount[msg.sender] >= 100) revert JobLimitReached();
 
+        // Perform upfront transfer if applicable BEFORE state mutation
+        if (job.upfrontAmount > 0 && !job.upfrontPaid) {
+            USDC.safeTransfer(msg.sender, job.upfrontAmount);
+            job.upfrontPaid = true;
+        }
+
         job.developer = msg.sender;
         job.status = JobStatus.Assigned;
         activeJobsCount[msg.sender]++;
 
         emit JobAssigned(_jobId, msg.sender);
-
-        if (job.upfrontAmount > 0 && !job.upfrontPaid) {
-            job.upfrontPaid = true;
-            USDC.safeTransfer(job.developer, job.upfrontAmount);
-        }
     }
 
     // ===================== SUBMIT WORK =====================
@@ -206,15 +207,15 @@ contract JobEscrow is ReentrancyGuard {
         if (msg.sender != job.employer) revert Unauthorized();
         if (job.status != JobStatus.WorkSubmitted) revert InvalidStatus();
 
-        job.status = JobStatus.Completed;
-        if (activeJobsCount[job.developer] > 0) {
-            activeJobsCount[job.developer]--;
-        }
-
         uint256 remaining = job.amount - (job.upfrontPaid ? job.upfrontAmount : 0);
 
         if (remaining > 0) {
             USDC.safeTransfer(job.developer, remaining);
+        }
+
+        job.status = JobStatus.Completed;
+        if (activeJobsCount[job.developer] > 0) {
+            activeJobsCount[job.developer]--;
         }
 
         emit PaymentReleased(_jobId, job.developer, job.amount);
@@ -342,22 +343,22 @@ contract JobEscrow is ReentrancyGuard {
         uint256 remaining = job.amount - (job.upfrontPaid ? job.upfrontAmount : 0);
 
         if (_favorDeveloper) {
-            job.status = JobStatus.Completed;
-            if (activeJobsCount[job.developer] > 0) activeJobsCount[job.developer]--;
-
             if (remaining > 0) {
                 USDC.safeTransfer(job.developer, remaining);
             }
 
-            emit PaymentReleased(_jobId, job.developer, job.amount);
-        } else {
-            job.status = JobStatus.Cancelled;
+            job.status = JobStatus.Completed;
             if (activeJobsCount[job.developer] > 0) activeJobsCount[job.developer]--;
 
+            emit PaymentReleased(_jobId, job.developer, job.amount);
+        } else {
             if (remaining > 0) {
                 USDC.safeTransfer(job.employer, remaining);
                 emit Refunded(_jobId, job.employer, remaining);
             }
+
+            job.status = JobStatus.Cancelled;
+            if (activeJobsCount[job.developer] > 0) activeJobsCount[job.developer]--;
         }
 
         emit DisputeResolved(_jobId, _favorDeveloper);

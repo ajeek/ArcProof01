@@ -1,6 +1,7 @@
 export const JOB_ESCROW_ADDRESS = "0xBa2B389B68E2cC6025AF235d460043c160D6bBa3";
 export const REPUTATION_REGISTRY_ADDRESS = "0x6453D3AbbB79ed84799EA65A313FA7054a3878C7";
 export const USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
+export const USDC_DECIMALS = 6;
 
 export const JOB_ESCROW_ABI = [
   {
@@ -855,6 +856,43 @@ export const REPUTATION_REGISTRY_ABI = [
       {
         "indexed": true,
         "internalType": "address",
+        "name": "employer",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "score",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "jobsCreated",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "jobsCompleted",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "jobsCancelled",
+        "type": "uint256"
+      }
+    ],
+    "name": "EmployerReputationUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
         "name": "developer",
         "type": "address"
       },
@@ -1163,17 +1201,12 @@ export const REPUTATION_REGISTRY_ABI = [
           },
           {
             "internalType": "uint256",
-            "name": "workSubmittedCount",
+            "name": "jobsCompleted",
             "type": "uint256"
           },
           {
             "internalType": "uint256",
-            "name": "paymentsReleased",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "disputesOpened",
+            "name": "jobsCancelled",
             "type": "uint256"
           },
           {
@@ -1183,7 +1216,12 @@ export const REPUTATION_REGISTRY_ABI = [
           },
           {
             "internalType": "uint256",
-            "name": "totalFundedUSDC",
+            "name": "disputesWon",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "totalVolume",
             "type": "uint256"
           },
           {
@@ -1192,56 +1230,24 @@ export const REPUTATION_REGISTRY_ABI = [
             "type": "uint256"
           },
           {
-            "internalType": "bool",
-            "name": "exists",
-            "type": "bool"
+            "internalType": "uint256",
+            "name": "storedScore",
+            "type": "uint256"
           }
         ],
-        "internalType": "struct ReputationRegistry.EmployerProfile",
+        "internalType": "struct ReputationRegistry.EmployerStats",
         "name": "profile",
         "type": "tuple"
       },
       {
-        "components": [
-          {
-            "internalType": "uint8",
-            "name": "reliabilityScore",
-            "type": "uint8"
-          },
-          {
-            "internalType": "uint8",
-            "name": "disputeIntegrityScore",
-            "type": "uint8"
-          },
-          {
-            "internalType": "uint8",
-            "name": "activityScore",
-            "type": "uint8"
-          },
-          {
-            "internalType": "uint8",
-            "name": "earnedValueScore",
-            "type": "uint8"
-          },
-          {
-            "internalType": "uint8",
-            "name": "coreIndex",
-            "type": "uint8"
-          },
-          {
-            "internalType": "string",
-            "name": "riskProfile",
-            "type": "string"
-          },
-          {
-            "internalType": "string",
-            "name": "tier",
-            "type": "string"
-          }
-        ],
-        "internalType": "struct ReputationRegistry.ReputationState",
-        "name": "reputation",
-        "type": "tuple"
+        "internalType": "uint256",
+        "name": "score",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "tier",
+        "type": "string"
       }
     ],
     "stateMutability": "view",
@@ -1260,34 +1266,9 @@ export const REPUTATION_REGISTRY_ABI = [
         "type": "address"
       },
       {
-        "internalType": "bool",
-        "name": "_created",
-        "type": "bool"
-      },
-      {
-        "internalType": "bool",
-        "name": "_funded",
-        "type": "bool"
-      },
-      {
-        "internalType": "bool",
-        "name": "_workSubmitted",
-        "type": "bool"
-      },
-      {
-        "internalType": "bool",
-        "name": "_released",
-        "type": "bool"
-      },
-      {
-        "internalType": "bool",
-        "name": "_disputeOpened",
-        "type": "bool"
-      },
-      {
-        "internalType": "bool",
-        "name": "_disputeLost",
-        "type": "bool"
+        "internalType": "uint8",
+        "name": "_eventType",
+        "type": "uint8"
       },
       {
         "internalType": "uint256",

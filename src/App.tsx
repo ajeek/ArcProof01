@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -47,7 +47,7 @@ import {
 } from 'wagmi';
 import { formatUnits, parseUnits, zeroAddress, parseEventLogs } from 'viem';
 import { useQueryClient } from '@tanstack/react-query';
-import { formatDevScore } from './lib/devScore';
+import { USDC_DECIMALS } from './lib/constants';
 import { 
   JOB_ESCROW_ADDRESS, 
   JOB_ESCROW_ABI, 
@@ -248,6 +248,61 @@ export default function App() {
     return 'developer';
   });
 
+  const [jobIdentities, setJobIdentities] = useState<Record<string, { employer: string, developer: string }>>({});
+  const publicClient = usePublicClient();
+
+  // --- Strict Event-Driven Identity Sourcing ---
+  useEffect(() => {
+    async function syncJobIdentities() {
+      if (!publicClient) return;
+      try {
+        const currentBlock = await publicClient.getBlockNumber();
+        const startBlock = currentBlock > BigInt(5000) ? currentBlock - BigInt(5000) : BigInt(0);
+
+        const logs = await publicClient.getLogs({
+          address: JOB_ESCROW_ADDRESS,
+          event: {
+            type: 'event',
+            name: 'JobCreated',
+            inputs: [
+              { type: 'uint256', name: 'jobId', indexed: true },
+              { type: 'address', name: 'employer', indexed: true },
+              { type: 'address', name: 'developer', indexed: true },
+              { type: 'uint256', name: 'amount' },
+              { type: 'uint256', name: 'upfrontPercent' }
+            ]
+          },
+          fromBlock: startBlock,
+          toBlock: currentBlock
+        });
+
+        const mapping: Record<string, { employer: string, developer: string }> = {};
+        logs.forEach(log => {
+          const { jobId, employer, developer } = log.args as any;
+          mapping[jobId.toString()] = { employer, developer };
+        });
+        setJobIdentities(prev => ({ ...prev, ...mapping }));
+      } catch (err) {
+        console.error("Failed to sync job identities from events", err);
+      }
+    }
+    syncJobIdentities();
+  }, [publicClient]);
+
+  useWatchContractEvent({
+    address: JOB_ESCROW_ADDRESS,
+    abi: JOB_ESCROW_ABI,
+    eventName: 'JobCreated',
+    onLogs(logs) {
+      const mapping: Record<string, { employer: string, developer: string }> = {};
+      logs.forEach(log => {
+        const { jobId, employer, developer } = log.args as any;
+        mapping[jobId.toString()] = { employer, developer };
+      });
+      setJobIdentities(prev => ({ ...prev, ...mapping }));
+    },
+  });
+
   const [employerTab, setEmployerTab] = useState<'initialize' | 'marketplace'>('initialize');
   const [showJobSuccessModal, setShowJobSuccessModal] = useState(false);
   const [createdJobData, setCreatedJobData] = useState<any>(null);
@@ -308,7 +363,7 @@ export default function App() {
 
   const { writeContractAsync } = useWriteContract();
   const [bindHash, setBindHash] = useState<`0x${string}` | undefined>();
-  const { isSuccess: isBindConfirmed } = useWaitForTransactionReceipt({ hash: bindHash });
+  const { isSuccess: isBindConfirmed } = useWaitForTransactionReceipt({ hash: bindHash, confirmations: 1 });
 
   const { data: linkedGithub, refetch: refetchGithub } = useReadContract({
     address: REPUTATION_REGISTRY_ADDRESS,
@@ -552,20 +607,24 @@ export default function App() {
   });
 
   const stats = useMemo(() => {
-    if (!registryProfile) return { score: 0, profile: null };
+    if (!registryProfile) return { score: 0, profile: null, tier: 'Rookie' };
     const [profile, reputation] = registryProfile as [any, any];
+    const score = reputation?.coreIndex ?? (Array.isArray(reputation) ? reputation[4] : 0);
+    const tier = reputation?.tier ?? (Array.isArray(reputation) ? reputation[5] : 'Rookie');
     return {
-      score: reputation.coreIndex || 0,
-      profile: profile
+      score: Number(score) || 0,
+      profile: profile,
+      tier: tier || 'Rookie'
     };
   }, [registryProfile]);
 
   const employerStats = useMemo(() => {
-    if (!employerRegistryProfile) return { score: 0, profile: null };
-    const [profile, reputation] = employerRegistryProfile as [any, any];
+    if (!employerRegistryProfile) return { score: 0, profile: null, tier: 'Rookie' };
+    const [profile, score, tier] = employerRegistryProfile as [any, any, string];
     return {
-      score: reputation.coreIndex || 0,
-      profile: profile
+      score: Number(score) || 0,
+      profile: profile,
+      tier: tier || 'Rookie'
     };
   }, [employerRegistryProfile]);
 
@@ -574,6 +633,15 @@ export default function App() {
     // For now we just track that we need to pass this state down.
     return 0; // Placeholder
   }, []);
+
+  useEffect(() => {
+    if (selectedJobId && activeTab === 'developer') {
+      const identity = jobIdentities[selectedJobId.toString()];
+      if (identity && identity.employer.toLowerCase() === address?.toLowerCase()) {
+        setSelectedJobId(null);
+      }
+    }
+  }, [activeTab, selectedJobId, jobIdentities, address]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -632,7 +700,7 @@ export default function App() {
               <div className="flex flex-col items-end mr-2">
                 <span className="text-[10px] font-bold text-arc-ink/40 uppercase tracking-widest">Balance</span>
                 <span className="text-xs font-mono font-medium">
-                  {usdcBalance ? Math.floor(Number(formatUnits(usdcBalance as bigint, 6))).toLocaleString() : "0"} USDC
+                  {usdcBalance ? Math.floor(Number(formatUnits(usdcBalance as bigint, USDC_DECIMALS))).toLocaleString() : "0"} USDC
                 </span>
               </div>
               <button 
@@ -670,6 +738,10 @@ export default function App() {
             <Button onClick={() => connect({ connector: connectors[0] })} className="px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg">
               Launch Dashboard
             </Button>
+          </div>
+        ) : !address ? (
+          <div className="h-[70vh] flex items-center justify-center">
+            <Loader2 className="w-8 h-8 animate-spin text-arc-ink/20" />
           </div>
         ) : (
           <>
@@ -886,53 +958,31 @@ export default function App() {
               <div className="lg:col-span-2 space-y-8">
                 
                 {/* Execution Integrity Overview */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4">
                   <Card className="flex flex-col justify-between p-6 bg-arc-paper border-arc-line">
                     <div className="flex justify-between items-start">
                       <div>
-                        <div className="text-[11px] uppercase tracking-widest text-arc-ink/40 font-semibold mb-1">Reputation Tier</div>
-                        <div className="text-4xl font-serif italic text-arc-ink/80">
-                          {activeTab === 'developer' ? formatDevScore(stats.score) : formatDevScore(employerStats.score)}
+                        <div className="text-[11px] uppercase tracking-widest text-arc-ink/40 font-bold mb-1">Reputation Tier</div>
+                        <div className="text-4xl font-serif italic text-arc-ink/80 mb-6">
+                          {activeTab === 'developer' ? stats.tier : employerStats.tier}
+                        </div>
+                        <div className="pt-4 border-t border-arc-line flex items-baseline gap-4">
+                           <div className="flex items-center gap-2">
+                             <span className="text-[10px] text-arc-ink/40 font-bold uppercase tracking-[0.2em]">Score</span>
+                             <span className="text-arc-ink/20 font-mono text-xs">=&gt;</span>
+                           </div>
+                           <span className="text-4xl font-mono text-arc-ink font-light tracking-tighter">
+                             {activeTab === 'developer' ? stats.score : employerStats.score}
+                           </span>
                         </div>
                       </div>
-                      <div className="bg-arc-ink/5 p-2 rounded-lg">
-                        <ShieldCheck className="w-6 h-6 text-arc-ink/40" />
+                      <div className="bg-arc-ink/5 p-3 rounded-2xl">
+                        <ShieldCheck className="w-8 h-8 text-arc-ink/40" />
                       </div>
                     </div>
                     <div className="mt-8 flex items-center gap-2 text-emerald-600">
                       <CircleCheck className="w-4 h-4" />
                       <span className="text-[11px] font-mono uppercase tracking-tight font-bold">Execution Verified</span>
-                    </div>
-                  </Card>
-                  
-                  <Card className="flex flex-col justify-between p-6 border-arc-ink/20 bg-arc-ink text-white relative overflow-hidden">
-                    <div className="absolute top-0 right-0 p-4 opacity-10">
-                      <Zap className="w-24 h-24" />
-                    </div>
-                    <div className="flex justify-between items-start relative z-10">
-                      <div>
-                        <div className="text-[11px] uppercase tracking-widest text-white/40 font-semibold mb-1">
-                          {activeTab === 'developer' ? "DevScore (Execution Index)" : "EmployerScore (Trust Index)"}
-                        </div>
-                        <div className="text-5xl font-mono">
-                          {activeTab === 'developer' ? formatDevScore(stats.score) : formatDevScore(employerStats.score)}
-                        </div>
-                      </div>
-                      <Badge className={cn(
-                        "text-[10px] py-1",
-                        (activeTab === 'developer' ? 
-                          (registryProfile as any)?.reputation?.riskProfile === 'Low' : 
-                          (employerRegistryProfile as any)?.reputation?.riskProfile === 'Low') ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" :
-                        (activeTab === 'developer' ?
-                          (registryProfile as any)?.reputation?.riskProfile === 'Medium' :
-                          (employerRegistryProfile as any)?.reputation?.riskProfile === 'Medium') ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
-                        "bg-red-500/20 text-red-300 border-red-500/30"
-                      )}>
-                        Reputation Verified
-                      </Badge>
-                    </div>
-                    <div className="mt-8 flex items-center gap-2 relative z-10">
-                       <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Real-time Deterministic State</span>
                     </div>
                   </Card>
                 </div>
@@ -967,8 +1017,8 @@ export default function App() {
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-6"
                     >
-                      <DeveloperProfile address={address!} allJobs={allJobs} onSelect={setSelectedJobId} />
-                      <JobExplorer address={address!} role="developer" allJobs={allJobs} onSelect={setSelectedJobId} />
+                      <DeveloperProfile address={address!} allJobs={allJobs} onSelect={setSelectedJobId} jobIdentities={jobIdentities} />
+                      <JobExplorer address={address!} role="developer" allJobs={allJobs} onSelect={setSelectedJobId} jobIdentities={jobIdentities} />
                     </motion.div>
                   ) : (
                     <motion.div 
@@ -1018,6 +1068,7 @@ export default function App() {
                               />
                             )}
                             <EmployerPanel 
+                              key={lastCreatedJobId?.toString() || 'initial'}
                               onJobCreated={handleJobCreated} 
                               onCreating={setIsCreatingJob}
                               onCreationStart={handleJobCreationStart}
@@ -1031,7 +1082,7 @@ export default function App() {
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.98 }}
                           >
-                             <JobExplorer address={address!} role="employer" allJobs={allJobs} onSelect={setSelectedJobId} />
+                             <JobExplorer address={address!} role="employer" allJobs={allJobs} onSelect={setSelectedJobId} jobIdentities={jobIdentities} />
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -1214,6 +1265,7 @@ export default function App() {
                       onClick={() => {
                         setShowJobSuccessModal(false);
                         setCreationStatus('idle');
+                        setCreatedJobData(null);
                         setAutoFlowJobId(null);
                         setSuccessHash(null);
                         setEmployerTab('initialize');
@@ -1285,7 +1337,7 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
   });
 
   const { writeContract, data: hash, isPending, status: writeStatus, error: writeError } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess, error: confirmError } = useWaitForTransactionReceipt({ hash });
+  const { isLoading: isConfirming, isSuccess, error: confirmError } = useWaitForTransactionReceipt({ hash, confirmations: 1 });
 
   // Deterministic Step Machine
   const [step, setStep] = useState<'idle' | 'analyzing' | 'approving' | 'awaiting_allowance' | 'funding' | 'awaiting_funding' | 'done' | 'error'>('idle');
@@ -1311,7 +1363,7 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
       // Check balance first
       if ((balance as bigint) < (amount as bigint)) {
         setStep('error');
-        setErrorMessage(`Insufficient USDC balance. Found ${formatUnits(balance as bigint, 6)}, need ${formatUnits(amount as bigint, 6)}.`);
+        setErrorMessage(`Insufficient USDC balance. Found ${formatUnits(balance as bigint, USDC_DECIMALS)}, need ${formatUnits(amount as bigint, USDC_DECIMALS)}.`);
         return;
       }
 
@@ -1332,7 +1384,7 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
 
     if (step === 'approving' && job) {
       const [,, amount] = job as any;
-      console.log(`[Escrow Flow] TRIGGER: approve(${formatUnits(amount, 6)})`);
+      console.log(`[Escrow Flow] TRIGGER: approve(${formatUnits(amount, USDC_DECIMALS)})`);
       setHasTriggered(true);
       writeContract({
         address: USDC_ADDRESS,
@@ -1441,7 +1493,7 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
                 </h4>
                 {balance !== undefined && job && (
                    <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-white/60 font-mono">
-                     {formatUnits(balance as bigint, 6)} / {formatUnits((job as any)[2], 6)} USDC
+                     {formatUnits(balance as bigint, USDC_DECIMALS)} / {formatUnits((job as any)[2], USDC_DECIMALS)} USDC
                    </span>
                 )}
              </div>
@@ -1495,7 +1547,7 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
   );
 }
 
-function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationError }: { onJobCreated: (id: bigint, params?: any) => void, onCreating: (state: boolean) => void, onCreationStart: (params: any) => void, onCreationError: (error: string) => void }) {
+function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationError }: { onJobCreated: (id: bigint, params?: any) => void, onCreating: (state: boolean) => void, onCreationStart: (params: any) => void, onCreationError: (error: string) => void, key?: string }) {
   const [devAddress, setDevAddress] = useState<string>(zeroAddress);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -1521,7 +1573,7 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
   }, [maxUpfront, upfront]);
 
   const { writeContract, data: hash, isPending, error: writeError } = useWriteContract();
-  const { data: receipt, isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
+  const { data: receipt, isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash, confirmations: 1 });
 
   useEffect(() => {
     if (isPending || isConfirming) {
@@ -1536,9 +1588,13 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
     }
   }, [writeError, onCreating, onCreationError]);
 
+  const hasProcessedReceipt = useRef<string | null>(null);
+
   // Extract jobId from receipt for immediate flow
+  // Handle Confirmation & Parent Notification
   useEffect(() => {
-    if (isConfirmed && receipt) {
+    if (isConfirmed && receipt && hasProcessedReceipt.current !== receipt.transactionHash) {
+      hasProcessedReceipt.current = receipt.transactionHash;
       onCreating(false);
       try {
         const logs = parseEventLogs({
@@ -1548,22 +1604,13 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
         });
         if (logs.length > 0) {
           const jobId = (logs[0] as any).args.jobId;
-          console.log("[EmployerPanel] Job created from receipt:", jobId);
           onJobCreated(jobId, { title, description, requirements, duration, amount, upfront });
-          
-          // Clear previous parameters for next escrow
-          setTitle('');
-          setDescription('');
-          setRequirements('');
-          setAmount('');
-          setUpfront(0);
-          setDevAddress(zeroAddress);
         }
       } catch (e) {
         console.error("Failed to parse logs from receipt", e);
       }
     }
-  }, [isConfirmed, receipt, onJobCreated, onCreating, title, description, requirements, duration, amount, upfront]);
+  }, [isConfirmed, receipt, onJobCreated, onCreating]);
 
   const handleCreate = () => {
     if (!devAddress || !amount || !title || !description) return;
@@ -1581,7 +1628,7 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
       address: JOB_ESCROW_ADDRESS,
       abi: JOB_ESCROW_ABI,
       functionName: 'createJob',
-      args: [devAddress as `0x${string}`, parseUnits(amount, 6), BigInt(upfront), metadata],
+      args: [devAddress as `0x${string}`, parseUnits(amount, USDC_DECIMALS), BigInt(upfront), metadata],
     } as any);
   };
 
@@ -1683,7 +1730,7 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
   );
 }
 
-function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: `0x${string}`, allJobs: bigint[], onSelect: (id: bigint) => void, onRefresh?: () => void }) {
+function DeveloperProfile({ address, allJobs, onSelect, onRefresh, jobIdentities }: { address: `0x${string}`, allJobs: bigint[], onSelect: (id: bigint) => void, onRefresh?: () => void, jobIdentities: any }) {
   const hasJobs = allJobs.length > 0;
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -1691,7 +1738,7 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: 
     address: REPUTATION_REGISTRY_ADDRESS,
     abi: REPUTATION_REGISTRY_ABI,
     functionName: 'getFullProfile',
-    args: [address],
+    args: address ? [address] : undefined,
     query: { enabled: !!address }
   });
 
@@ -1702,8 +1749,29 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: 
     setTimeout(() => setIsRefreshing(false), 1000);
   };
 
-  const reputation = (registryProfile as any)?.reputation;
-  const profile = (registryProfile as any)?.profile;
+  const [profileData, reputationData] = (registryProfile as [any, any]) || [null, null];
+  
+  const reputation = useMemo(() => {
+    if (!reputationData) return null;
+    return {
+      tier: reputationData.tier ?? (Array.isArray(reputationData) ? reputationData[5] : 'Rookie'),
+      coreIndex: reputationData.coreIndex ?? (Array.isArray(reputationData) ? reputationData[4] : 0),
+      reliabilityScore: reputationData.reliabilityScore ?? (Array.isArray(reputationData) ? reputationData[0] : 0),
+      disputeIntegrityScore: reputationData.disputeIntegrityScore ?? (Array.isArray(reputationData) ? reputationData[1] : 0),
+      earnedValueScore: reputationData.earnedValueScore ?? (Array.isArray(reputationData) ? reputationData[2] : 0),
+      activityScore: reputationData.activityScore ?? (Array.isArray(reputationData) ? reputationData[3] : 0),
+    };
+  }, [reputationData]);
+
+  const profile = useMemo(() => {
+    if (!profileData) return null;
+    return {
+      completedJobs: profileData.completedJobs ?? (Array.isArray(profileData) ? profileData[0] : 0),
+      failedJobs: profileData.failedJobs ?? (Array.isArray(profileData) ? profileData[1] : 0),
+      totalEarnedUSDC: profileData.totalEarnedUSDC ?? (Array.isArray(profileData) ? profileData[2] : 0),
+      disputesWon: profileData.disputesWon ?? (Array.isArray(profileData) ? profileData[3] : 0),
+    };
+  }, [profileData]);
 
   return (
     <div className="space-y-10">
@@ -1714,13 +1782,20 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: 
              <div className="flex items-center gap-3">
                <ShieldCheck className="w-5 h-5 text-arc-ink" />
                <h2 className="text-xl font-medium tracking-tight">Reputation Matrix</h2>
-               <Badge className="bg-arc-ink text-white normal-case px-2.5 py-0.5">
-                 {formatDevScore(reputation?.coreIndex)}
-               </Badge>
+               <div className="flex items-center gap-6 ml-4">
+                 <div className="flex flex-col">
+                   <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Reputation Tier</span>
+                   <span className="text-sm font-medium text-arc-ink">{reputation.tier}</span>
+                 </div>
+                 <div className="flex flex-col border-l border-arc-line pl-6">
+                   <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Score</span>
+                   <span className="text-sm font-bold text-arc-ink">{"=>"} {reputation.coreIndex.toString()}</span>
+                 </div>
+               </div>
                <button 
                  onClick={handleManualRefresh}
                  disabled={isRefreshing}
-                 className="p-1.5 rounded-lg hover:bg-arc-ink/5 transition-colors disabled:opacity-50"
+                 className="p-1.5 rounded-lg hover:bg-arc-ink/5 transition-colors disabled:opacity-50 ml-2"
                  title="Refresh Reputation"
                >
                  <RefreshCcw className={cn("w-4 h-4 text-arc-ink/40", isRefreshing && "animate-spin")} />
@@ -1763,7 +1838,7 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: 
              </div>
              <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
                 <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Total Earned</div>
-                <div className="text-xl font-mono">${profile ? Math.floor(Number(formatUnits(profile.totalEarnedUSDC, 6))).toLocaleString() : "0"}</div>
+                <div className="text-xl font-mono">${profile ? Math.floor(Number(formatUnits(profile.totalEarnedUSDC, USDC_DECIMALS))).toLocaleString() : "0"}</div>
              </div>
              <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
                 <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Won</div>
@@ -1787,7 +1862,7 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: 
             </div>
             <div className="space-y-4">
               {hasJobs ? allJobs.map(id => (
-                <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="active" onSelect={onSelect} />
+                <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="active" onSelect={onSelect} jobIdentities={jobIdentities} />
               )) : (
                 <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No active jobs found.</div>
               )}
@@ -1801,7 +1876,7 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: 
             </div>
             <div className="space-y-4">
               {hasJobs ? allJobs.map(id => (
-                <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="completed" onSelect={onSelect} />
+                <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="completed" onSelect={onSelect} jobIdentities={jobIdentities} />
               )) : (
                 <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No completed jobs found.</div>
               )}
@@ -1815,7 +1890,7 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: 
             </div>
             <div className="space-y-4">
               {hasJobs ? allJobs.map(id => (
-                <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="rejected" onSelect={onSelect} />
+                <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="rejected" onSelect={onSelect} jobIdentities={jobIdentities} />
               )) : (
                 <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No rejected jobs found.</div>
               )}
@@ -1827,7 +1902,7 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh }: { address: 
   );
 }
 
-function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, mode: 'active' | 'completed' | 'rejected', onSelect: (id: bigint) => void }) {
+function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect, jobIdentities }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, mode: 'active' | 'completed' | 'rejected', onSelect: (id: bigint) => void, jobIdentities: any }) {
   const { data: job } = useReadContract({
     address: JOB_ESCROW_ADDRESS,
     abi: JOB_ESCROW_ABI,
@@ -1835,10 +1910,15 @@ function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect }: { key?: stri
     args: [jobId],
   });
 
-  if (!job || job[0] === zeroAddress) return null;
-  const [employer, developer, amount, upfrontAmount, metadataURL, status, upfrontPaid, upfrontPercent] = job as any;
+  if (!job) return null;
+  const jobArray = Array.isArray(job) ? job : null;
+  const employer = jobArray ? jobArray[0] : (job as any).employer;
+  const developer = jobArray ? jobArray[1] : (job as any).developer;
+  const status = jobArray ? jobArray[5] : (job as any).status;
+
+  if (!employer || employer === zeroAddress) return null;
   
-  const isMine = developer === viewerAddress;
+  const isMine = developer?.toLowerCase() === viewerAddress?.toLowerCase();
   const s = Number(status);
   const isActive = s === 2 || s === 3 || s === 5; // Assigned, WorkSubmitted, Disputed
   const isCompleted = s === 4;
@@ -1851,7 +1931,7 @@ function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect }: { key?: stri
   return <JobCard jobId={jobId} viewerAddress={viewerAddress} compact onSelect={onSelect} role="developer" />;
 }
 
-function JobExplorer({ address, role, allJobs, onSelect }: { address: `0x${string}`, role: 'developer' | 'employer', allJobs: bigint[], onSelect: (id: bigint) => void }) {
+function JobExplorer({ address, role, allJobs, onSelect, jobIdentities }: { address: `0x${string}`, role: 'developer' | 'employer', allJobs: bigint[], onSelect: (id: bigint) => void, jobIdentities: any }) {
   if (role === 'employer') {
     return (
       <div className="space-y-10">
@@ -1869,6 +1949,7 @@ function JobExplorer({ address, role, allJobs, onSelect }: { address: `0x${strin
             address={address} 
             statuses={[0, 1, 2, 3, 7]} 
             onSelect={onSelect} 
+            jobIdentities={jobIdentities}
           />
           <EmployerJobSection 
             title="Cancelled Job" 
@@ -1876,6 +1957,7 @@ function JobExplorer({ address, role, allJobs, onSelect }: { address: `0x${strin
             address={address} 
             statuses={[6]} 
             onSelect={onSelect} 
+            jobIdentities={jobIdentities}
           />
           <EmployerJobSection 
             title="Completed Job" 
@@ -1883,6 +1965,7 @@ function JobExplorer({ address, role, allJobs, onSelect }: { address: `0x${strin
             address={address} 
             statuses={[4]} 
             onSelect={onSelect} 
+            jobIdentities={jobIdentities}
           />
           <EmployerJobSection 
             title="In Dispute" 
@@ -1890,6 +1973,7 @@ function JobExplorer({ address, role, allJobs, onSelect }: { address: `0x${strin
             address={address} 
             statuses={[5]} 
             onSelect={onSelect} 
+            jobIdentities={jobIdentities}
           />
         </div>
       </div>
@@ -1908,7 +1992,7 @@ function JobExplorer({ address, role, allJobs, onSelect }: { address: `0x${strin
       <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {allJobs.map(id => (
-            <JobDiscoveryFilter key={id.toString()} jobId={id} viewerAddress={address} role="developer" onSelect={onSelect} />
+            <JobDiscoveryFilter key={id.toString()} jobId={id} viewerAddress={address} role="developer" onSelect={onSelect} jobIdentities={jobIdentities} />
           ))}
         </div>
       </div>
@@ -1916,7 +2000,7 @@ function JobExplorer({ address, role, allJobs, onSelect }: { address: `0x${strin
   );
 }
 
-function EmployerJobSection({ title, allJobs, address, statuses, onSelect }: { title: string, allJobs: bigint[], address: `0x${string}`, statuses: number[], onSelect: (id: bigint) => void }) {
+function EmployerJobSection({ title, allJobs, address, statuses, onSelect, jobIdentities }: { title: string, allJobs: bigint[], address: `0x${string}`, statuses: number[], onSelect: (id: bigint) => void, jobIdentities: any }) {
   // We need to count matching jobs to show/hide empty sections or just show empty state
   return (
     <div className="space-y-6">
@@ -1927,14 +2011,14 @@ function EmployerJobSection({ title, allJobs, address, statuses, onSelect }: { t
       </h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {allJobs.map(id => (
-          <JobStatusFilter key={id.toString()} jobId={id} viewerAddress={address} targetStatuses={statuses} onSelect={onSelect} />
+          <JobStatusFilter key={id.toString()} jobId={id} viewerAddress={address} targetStatuses={statuses} onSelect={onSelect} jobIdentities={jobIdentities} />
         ))}
       </div>
     </div>
   );
 }
 
-function JobStatusFilter({ jobId, viewerAddress, targetStatuses, onSelect }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, targetStatuses: number[], onSelect: (id: bigint) => void }) {
+function JobStatusFilter({ jobId, viewerAddress, targetStatuses, onSelect, jobIdentities }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, targetStatuses: number[], onSelect: (id: bigint) => void, jobIdentities: any }) {
   const { data: job } = useReadContract({
     address: JOB_ESCROW_ADDRESS,
     abi: JOB_ESCROW_ABI,
@@ -1942,10 +2026,14 @@ function JobStatusFilter({ jobId, viewerAddress, targetStatuses, onSelect }: { k
     args: [jobId],
   });
 
-  if (!job || job[0] === zeroAddress) return null;
-  const [employer, , , , , status] = job as any;
+  if (!job) return null;
+  const jobArray = Array.isArray(job) ? job : null;
+  const employer = jobArray ? jobArray[0] : (job as any).employer;
+  const status = jobArray ? jobArray[5] : (job as any).status;
 
-  if (employer !== viewerAddress) return null;
+  if (!employer || employer === zeroAddress) return null;
+
+  if (employer?.toLowerCase() !== viewerAddress?.toLowerCase()) return null;
   if (!targetStatuses.includes(Number(status))) return null;
   
   return (
@@ -1958,7 +2046,7 @@ function JobStatusFilter({ jobId, viewerAddress, targetStatuses, onSelect }: { k
   );
 }
 
-function JobDiscoveryFilter({ jobId, viewerAddress, role, onSelect }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, role: 'developer' | 'employer', onSelect: (id: bigint) => void }) {
+function JobDiscoveryFilter({ jobId, viewerAddress, role, onSelect, jobIdentities }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, role: 'developer' | 'employer', onSelect: (id: bigint) => void, jobIdentities: any }) {
   const { data: job } = useReadContract({
     address: JOB_ESCROW_ADDRESS,
     abi: JOB_ESCROW_ABI,
@@ -1966,12 +2054,16 @@ function JobDiscoveryFilter({ jobId, viewerAddress, role, onSelect }: { key?: st
     args: [jobId],
   });
 
-  if (!job || job[0] === zeroAddress) return null;
-  const [employer, , , , , status] = job as any;
+  if (!job) return null;
+  const jobArray = Array.isArray(job) ? job : null;
+  const employer = jobArray ? jobArray[0] : (job as any).employer;
+  const status = jobArray ? jobArray[5] : (job as any).status;
+
+  if (!employer || employer === zeroAddress) return null;
 
   // Requirement: Only show jobs in 'Funded' status (1) for developers in public explorer, and exclude self-posted jobs
-  if (role === 'developer' && (status !== 1 || employer === viewerAddress)) return null;
-  if (role === 'employer' && employer !== viewerAddress) return null;
+  if (role === 'developer' && (Number(status) !== 1 || (employer && employer.toLowerCase() === viewerAddress?.toLowerCase()))) return null;
+  if (role === 'employer' && employer?.toLowerCase() !== viewerAddress?.toLowerCase()) return null;
   
   return <JobCard jobId={jobId} viewerAddress={viewerAddress} compact onSelect={onSelect} role={role} />;
 }
@@ -2191,7 +2283,8 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
     address: JOB_ESCROW_ADDRESS,
     abi: JOB_ESCROW_ABI,
     functionName: 'activeJobsCount',
-    args: [viewerAddress],
+    args: viewerAddress ? [viewerAddress] : undefined,
+    query: { enabled: !!viewerAddress }
   });
 
   const { data: allowance } = useReadContract({
@@ -2211,7 +2304,8 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
 
   const { writeContract, data: hash, isPending, error: writeError } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ 
-    hash
+    hash,
+    confirmations: 1
   });
 
   useEffect(() => {
@@ -2232,6 +2326,12 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
   if (!job || job[0] === zeroAddress) return compact ? null : <Card>Job not found</Card>;
 
   const [employer, developer, amount, upfrontAmount, metadataURL, status, upfrontPaid, upfrontPercent] = job as any;
+
+  // Requirement: Employer should never have access to the same job that he posted when he switch to his developer section
+  if (role === 'developer' && employer?.toLowerCase() === viewerAddress?.toLowerCase()) {
+    return null;
+  }
+
   const statusLabels = ["Created", "Funded", "Assigned", "WorkSubmitted", "Completed", "Disputed", "Cancelled", "Rejected"];
   
   let parsedMetadata = { title: "Unnamed Job", description: "No description provided.", requirements: "None", duration: 0 };
@@ -2247,7 +2347,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
   const hasResubmitted = Number(resubCount || 0) >= 1;
 
   const handleApprove = () => {
-    console.log(`[Escrow Debug] Requesting USDC approval for ${formatUnits(amount as bigint, 6)} tokens to ${JOB_ESCROW_ADDRESS}`);
+    console.log(`[Escrow Debug] Requesting USDC approval for ${formatUnits(amount as bigint, USDC_DECIMALS)} tokens to ${JOB_ESCROW_ADDRESS}`);
     writeContract({
       address: USDC_ADDRESS,
       abi: USDC_ABI,
@@ -2349,8 +2449,8 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
   const handleFund = () => {
     console.log(`[Escrow Debug] Attempting to fund Job #${jobId.toString()}`);
     console.log(`[Escrow Debug] Employer: ${viewerAddress}`);
-    console.log(`[Escrow Debug] Current Allowance: ${allowance ? formatUnits(allowance as bigint, 6) : "Unknown"} USDC`);
-    console.log(`[Escrow Debug] Required Amount: ${formatUnits(amount as bigint, 6)} USDC`);
+    console.log(`[Escrow Debug] Current Allowance: ${allowance ? formatUnits(allowance as bigint, USDC_DECIMALS) : "Unknown"} USDC`);
+    console.log(`[Escrow Debug] Required Amount: ${formatUnits(amount as bigint, USDC_DECIMALS)} USDC`);
     
     writeContract({
       address: JOB_ESCROW_ADDRESS,
@@ -2622,10 +2722,10 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
            <div className="flex items-center gap-1.5 overflow-hidden">
              <div className="text-[10px] text-arc-ink/40 font-mono shrink-0">By {(employer as string).slice(0, 6)}</div>
              <Badge className="bg-arc-ink/5 text-arc-ink/40 border-none px-1.5 py-0 scale-90 origin-left">
-               {formatDevScore((empRegistryProfile as any)?.reputation?.coreIndex)}
+               {(empRegistryProfile as any)?.[2]} ({(empRegistryProfile as any)?.[1]?.toString()})
              </Badge>
            </div>
-           <div className="text-sm font-mono font-bold text-arc-ink/80 shrink-0">{Math.floor(Number(formatUnits(amount as bigint, 6))).toLocaleString()} USDC</div>
+           <div className="text-sm font-mono font-bold text-arc-ink/80 shrink-0">{Math.floor(Number(formatUnits(amount as bigint, USDC_DECIMALS))).toLocaleString()} USDC</div>
         </div>
       </Card>
     );
@@ -2657,7 +2757,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
           </div>
         </div>
         <div className="text-right">
-          <div className="text-2xl font-mono font-bold text-arc-ink">{Math.floor(Number(formatUnits(amount as bigint, 6))).toLocaleString()} USDC</div>
+          <div className="text-2xl font-mono font-bold text-arc-ink">{Math.floor(Number(formatUnits(amount as bigint, USDC_DECIMALS))).toLocaleString()} USDC</div>
           <div className="text-[10px] text-arc-ink/40 uppercase font-black">{upfrontPercent.toString()}% Upfront Settlement</div>
         </div>
       </div>
@@ -2686,7 +2786,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
             <div className="text-xs font-mono flex items-center gap-2">
               <span>{(employer as string).slice(0, 8)}...{(employer as string).slice(-6)}</span>
               <Badge className="bg-arc-ink text-white">
-                {formatDevScore((empRegistryProfile as any)?.reputation?.coreIndex)}
+                {(empRegistryProfile as any)?.[2]} ({(empRegistryProfile as any)?.[1]?.toString()})
               </Badge>
             </div>
           </div>
@@ -2697,7 +2797,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
                 <div className="flex items-center gap-2">
                   <span>{(developer as string).slice(0, 8)}...{(developer as string).slice(-6)}</span>
                   <Badge className="bg-arc-ink text-white">
-                    {formatDevScore((devRegistryProfile as any)?.reputation?.coreIndex)}
+                    {(devRegistryProfile as any)?.[1]?.tier} ({(devRegistryProfile as any)?.[1]?.coreIndex?.toString()})
                   </Badge>
                 </div>
               )}

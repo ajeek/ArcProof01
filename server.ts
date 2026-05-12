@@ -94,29 +94,87 @@ async function startServer() {
     }
   });
 
-  // --- Offchain Indexer ---
-  
-  console.log("Initializing ArcProof Indexer (HTTP Polling Mode)...");
+    // --- Offchain Indexer ---
     
-  let provider = new ethers.JsonRpcProvider(RPC_URL);
-  let wallet = new ethers.Wallet(INDEXER_KEY, provider);
-  
-  console.log(`[Indexer] Wallet Address: ${wallet.address}`);
-  
-  let escrowContract = new ethers.Contract(JOB_ESCROW_ADDRESS, JOB_ESCROW_ABI, provider);
-  let registryContract = new ethers.Contract(REPUTATION_REGISTRY_ADDRESS, REPUTATION_REGISTRY_ABI, wallet);
+    console.log("Initializing ArcProof Indexer (HTTP Polling Mode)...");
+      
+    let provider = new ethers.JsonRpcProvider(RPC_URL);
+    let wallet = new ethers.Wallet(INDEXER_KEY, provider);
+    
+    console.log(`[Indexer] Wallet Address: ${wallet.address}`);
+    
+    let escrowContract = new ethers.Contract(JOB_ESCROW_ADDRESS, JOB_ESCROW_ABI, provider);
+    let registryContract = new ethers.Contract(REPUTATION_REGISTRY_ADDRESS, REPUTATION_REGISTRY_ABI, wallet);
 
-  // Validate Indexer Authorization
-  registryContract.indexer().then((authorizedIndexer: string) => {
-    if (authorizedIndexer.toLowerCase() !== wallet.address.toLowerCase()) {
-      console.warn(`[Indexer] WARNING: This wallet (${wallet.address}) is NOT the authorized indexer in the ReputationRegistry contract (${authorizedIndexer}). Stats updates will likely fail.`);
-    } else {
-      console.log("[Indexer] Authorization confirmed: Wallet is the authorized indexer.");
+    // Strict Identity Mapping Cache (Event-only Source of Truth)
+    const jobEmployerMap: Record<string, string> = {};
+    const jobDeveloperMap: Record<string, string> = {};
+    const jobAmountMap: Record<string, bigint> = {};
+    const jobFundedMap: Record<string, boolean> = {};
+
+    // Transaction Queue for Indexer Writes
+    const txQueue: { task: () => Promise<ethers.ContractTransactionResponse>; description: string }[] = [];
+    let isProcessingQueue = false;
+
+    async function processQueue() {
+      if (isProcessingQueue || txQueue.length === 0) return;
+      isProcessingQueue = true;
+      while (txQueue.length > 0) {
+        const { task, description } = txQueue[0];
+        try {
+          console.log(`[Queue] Executing: ${description}`);
+          const tx = await task();
+          await tx.wait();
+          console.log(`[Queue] Succeeded: ${description} (Hash: ${tx.hash})`);
+          txQueue.shift();
+        } catch (err: any) {
+          // If it's a logic failure (revert), we need to know why.
+          // But according to directives, we retry until success. 
+          // However, we should check if it's a CALL_EXCEPTION which might indicate a root cause we should have fixed.
+          console.error(`[Queue] Failed: ${description} - ${err.message}. Retrying in 10s...`);
+          await new Promise(resolve => setTimeout(resolve, 10000));
+        }
+      }
+      isProcessingQueue = false;
     }
-  }).catch((err: any) => console.error("[Indexer] Failed to verify authorized indexer:", err.message));
 
-  // GitHub Binding API (Attestation Signer)
-  app.post("/api/github-bind", async (req, res) => {
+    function queueTx(task: () => Promise<ethers.ContractTransactionResponse>, description: string) {
+      txQueue.push({ task, description });
+      processQueue();
+    }
+
+    // Validate Indexer Authorization
+    async function checkIndexerStatus() {
+      try {
+        const authorizedIndexer = await registryContract.indexer();
+        if (authorizedIndexer.toLowerCase() !== wallet.address.toLowerCase()) {
+          console.warn(`[Indexer] WARNING: Wallet (${wallet.address}) is NOT the authorized indexer (${authorizedIndexer}). Attempting take-over...`);
+          
+          try {
+            const owner = await registryContract.owner();
+            if (owner.toLowerCase() === wallet.address.toLowerCase()) {
+              console.log("[Indexer] Wallet is OWNER. Setting self as indexer...");
+              const tx = await registryContract.setIndexer(wallet.address);
+              await tx.wait();
+              console.log("[Indexer] Successfully set indexer to self.");
+            } else {
+              console.error("[Indexer] FATAL: Wallet is NOT OWNER and NOT authorized indexer. Indexer writes will fail.");
+            }
+          } catch (ownErr: any) {
+            console.error("[Indexer] Could not check owner or set indexer:", ownErr.message);
+          }
+        } else {
+          console.log("[Indexer] Authorization confirmed.");
+        }
+      } catch (err: any) {
+        console.error("[Indexer] Status check failed:", err.message);
+      }
+    }
+    
+    checkIndexerStatus();
+
+    // GitHub Binding API (Attestation Signer)
+    app.post("/api/github-bind", async (req, res) => {
       const { username, walletAddress } = req.body;
       if (!username || !walletAddress) {
         return res.status(400).json({ error: "Username and wallet address are required" });
@@ -206,177 +264,109 @@ async function startServer() {
     let lastProcessedBlock: number;
     let isPolling = false;
 
+    // Local State Rebuild for Determinism (Not for UI)
+    const jobScoredMap: Record<string, boolean> = {};
+
     async function processLogs(fromBlock: number, toBlock: number) {
-      console.log(`[Indexer] Processing blocks ${fromBlock} to ${toBlock}...`);
+      if (fromBlock > toBlock) return;
       try {
         const logs = await provider.getLogs({
           address: JOB_ESCROW_ADDRESS,
-          fromBlock,
-          toBlock,
+          fromBlock: fromBlock,
+          toBlock: toBlock,
         });
-
-        if (logs.length > 0) {
-          console.log(`[Indexer] Found ${logs.length} logs in range.`);
-        }
 
         for (const log of logs) {
           try {
             const parsedLog = escrowContract.interface.parseLog(log);
             if (!parsedLog) continue;
 
-            console.log(`[Indexer] Event detected: ${parsedLog.name} at block ${log.blockNumber}`);
+            const jobId = parsedLog.args[0];
+            const jobIdStr = jobId.toString();
 
-            if (parsedLog.name === "PaymentReleased") {
-              const [jobId, developer, amount] = parsedLog.args;
-              console.log(`[Indexer] PaymentReleased details: Job ${jobId}, Dev ${developer}, Amount ${amount}`);
-              
-              const jobData = await escrowContract.jobs(jobId);
-              const employer = jobData.employer;
+            if (parsedLog.name === "JobCreated") {
+               const [, employer, developer, amount] = parsedLog.args;
+               jobEmployerMap[jobIdStr] = employer;
+               jobDeveloperMap[jobIdStr] = developer;
+               jobAmountMap[jobIdStr] = amount;
+               
+               // We don't update reputation on Created, only on Funded (as per directive 1 in previous turn, and symmetry now)
+               // However, JobCreated sets the identity.
+            } else if (parsedLog.name === "PaymentReleased") {
+               const [, , amount] = parsedLog.args;
+               const employer = jobEmployerMap[jobIdStr];
+               const developer = jobDeveloperMap[jobIdStr];
 
-              // Verify if already scored to avoid redundant txs (idempotency check)
-              const alreadyScored = await registryContract.jobScored(jobId);
-              if (alreadyScored) {
-                 console.log(`[Indexer] Job ${jobId} already scored. Skipping.`);
-                 continue;
-              }
-
-              console.log(`[Indexer] Sending updateStats and updateEmployerStats for Job ${jobId} (Completed)...`);
-              const tx = await registryContract.updateStats(jobId, developer, 1, 0, amount, amount, false, false);
-              console.log(`[Indexer] Dev Stats update tx: ${tx.hash}`);
-              
-              const txEmp = await registryContract.updateEmployerStats(
-                jobId, employer, false, false, false, true, false, false, 0
-              );
-              console.log(`[Indexer] Employer Stats update tx: ${txEmp.hash}`);
-
-              await Promise.all([tx.wait(), txEmp.wait()]);
-              console.log(`[Indexer] Registry updated for Job ${jobId}.`);
+               if (employer && developer && !jobScoredMap[jobIdStr]) {
+                 jobScoredMap[jobIdStr] = true;
+                 queueTx(
+                   () => registryContract.updateStats(jobId, developer, 1, 0, amount, amount, false, false),
+                   `PaymentReleased: Update dev stats for job ${jobIdStr}`
+                 );
+                 queueTx(
+                   () => registryContract.updateEmployerStats(jobId, employer, 1, 0),
+                   `PaymentReleased: Update employer stats for job ${jobIdStr}`
+                 );
+               }
             } else if (parsedLog.name === "DisputeResolved") {
-              const [jobId, favorDeveloper] = parsedLog.args;
-              console.log(`[Indexer] DisputeResolved details: Job ${jobId}, favorDeveloper: ${favorDeveloper}`);
-              
-              const alreadyScored = await registryContract.jobScored(jobId);
-              if (alreadyScored) {
-                 console.log(`[Indexer] Job ${jobId} already scored. Skipping.`);
-                 continue;
-              }
+               const [, favorDeveloper] = parsedLog.args;
+               const employer = jobEmployerMap[jobIdStr];
+               const developer = jobDeveloperMap[jobIdStr];
+               const amount = jobAmountMap[jobIdStr] || BigInt(0);
 
-              const jobData = await escrowContract.jobs(jobId);
-              const developer = jobData.developer;
-              const employer = jobData.employer;
-              const totalAmount = jobData.amount;
-
-              if (developer === ethers.ZeroAddress) {
-                console.warn(`[Indexer] DisputeResolved for Job ${jobId} but developer address is zero.`);
-                continue;
-              }
-
-              console.log(`[Indexer] Sending updateStats and updateEmployerStats for Job ${jobId} (Disputed outcome)...`);
-              const tx = await registryContract.updateStats(
-                jobId,
-                developer, 
-                favorDeveloper ? 1 : 0, 
-                favorDeveloper ? 0 : 1, 
-                favorDeveloper ? totalAmount : 0, 
-                totalAmount, 
-                favorDeveloper, 
-                !favorDeveloper
-              );
-              
-              const txEmp = await registryContract.updateEmployerStats(
-                jobId,
-                employer,
-                false,
-                false,
-                false,
-                favorDeveloper ? false : true, // released to employer if !favorDeveloper
-                false,
-                favorDeveloper, // lost if favorDeveloper
-                0
-              );
-
-              await Promise.all([tx.wait(), txEmp.wait()]);
-              console.log(`[Indexer] Registry updated for dispute outcome on Job ${jobId}.`);
+               if (employer && developer && !jobScoredMap[jobIdStr]) {
+                 jobScoredMap[jobIdStr] = true;
+                 queueTx(
+                   () => registryContract.updateStats(
+                     jobId, developer, 
+                     favorDeveloper ? 1 : 0, favorDeveloper ? 0 : 1, 
+                     favorDeveloper ? 0 : amount, amount,
+                     favorDeveloper, !favorDeveloper
+                   ),
+                   `DisputeResolved: Update dev stats for job ${jobIdStr} (FavorDev: ${favorDeveloper})`
+                 );
+                 queueTx(
+                   () => registryContract.updateEmployerStats(
+                        jobId, employer, favorDeveloper ? 2 : 3, 0
+                   ),
+                   `DisputeResolved: Update employer stats for job ${jobIdStr} (FavorDev: ${favorDeveloper})`
+                 );
+               }
             } else if (parsedLog.name === "WorkRejected") {
-               const [jobId, timestamp, reason] = parsedLog.args;
-               console.log(`[Indexer] WorkRejected detected for Job ${jobId}. Reason: ${reason}`);
-               
-               const jobData = await escrowContract.jobs(jobId);
-               const developer = jobData.developer;
-               if (developer !== ethers.ZeroAddress) {
-                 console.log(`[Indexer] Sending recordRejection for Job ${jobId} (Dev: ${developer})...`);
-                 try {
-                   const tx = await registryContract.recordRejection(jobId, developer);
-                   console.log(`[Indexer] Rejection recorded. Hash: ${tx.hash}`);
-                 } catch (err: any) {
-                   console.error(`[Indexer] Failed to record rejection: ${err.message}`);
-                 }
-               }
-            } else if (parsedLog.name === "WorkSubmitted") {
-               const [jobId, proofHash] = parsedLog.args;
-               console.log(`[Indexer] WorkSubmitted detected for Job ${jobId}`);
-               
-               const jobData = await escrowContract.jobs(jobId);
-               const employer = jobData.employer;
-               
-               try {
-                 const tx = await registryContract.updateEmployerStats(
-                   jobId, employer, false, false, true, false, false, false, 0
+               const developer = jobDeveloperMap[jobIdStr];
+               if (developer) {
+                 queueTx(
+                   () => registryContract.recordRejection(jobId, developer),
+                   `WorkRejected: Record rejection for developer ${developer} (Job ${jobIdStr})`
                  );
-                 console.log(`[Indexer] Work submission recorded for employer. Hash: ${tx.hash}`);
-               } catch (err: any) {
-                 console.error(`[Indexer] Failed to record work submission: ${err.message}`);
-               }
-            } else if (parsedLog.name === "JobCreated") {
-               const [jobId, employer, developer, amount] = parsedLog.args;
-               console.log(`[Indexer] JobCreated detected: ${jobId} by ${employer}`);
-               
-               try {
-                 const tx = await registryContract.updateEmployerStats(
-                   jobId, employer, true, false, false, false, false, false, 0
-                 );
-                 console.log(`[Indexer] Job creation recorded for employer. Hash: ${tx.hash}`);
-               } catch (err: any) {
-                 console.error(`[Indexer] Failed to record job creation: ${err.message}`);
                }
             } else if (parsedLog.name === "JobFunded") {
-               const [jobId] = parsedLog.args;
-               console.log(`[Indexer] JobFunded detected: ${jobId}`);
-               
-               const jobData = await escrowContract.jobs(jobId);
-               const employer = jobData.employer;
-               const amount = jobData.amount;
-
-               try {
-                 const tx = await registryContract.updateEmployerStats(
-                   jobId, employer, false, true, false, false, false, false, amount
+               const employer = jobEmployerMap[jobIdStr];
+               const amount = jobAmountMap[jobIdStr] || BigInt(0);
+               jobFundedMap[jobIdStr] = true;
+               if (employer) {
+                 queueTx(
+                   () => registryContract.updateEmployerStats(jobId, employer, 0, amount),
+                   `JobFunded: Update employer stats for job ${jobIdStr}`
                  );
-                 console.log(`[Indexer] Job funding recorded for employer. Hash: ${tx.hash}`);
-               } catch (err: any) {
-                 console.error(`[Indexer] Failed to record job funding: ${err.message}`);
                }
-            } else if (parsedLog.name === "DisputeOpened") {
-               const [jobId, opener] = parsedLog.args;
-               console.log(`[Indexer] DisputeOpened detected for Job ${jobId} by ${opener}`);
-               
-               const jobData = await escrowContract.jobs(jobId);
-               const employer = jobData.employer;
-               
-               try {
-                 const tx = await registryContract.updateEmployerStats(
-                   jobId, employer, false, false, false, false, true, false, 0
-                 );
-                 console.log(`[Indexer] Dispute opening recorded for employer. Hash: ${tx.hash}`);
-               } catch (err: any) {
-                 console.error(`[Indexer] Failed to record dispute opening: ${err.message}`);
+            } else if (parsedLog.name === "JobClosed") {
+               const employer = jobEmployerMap[jobIdStr];
+               const wasFunded = jobFundedMap[jobIdStr];
+               if (employer && wasFunded && !jobScoredMap[jobIdStr]) {
+                  jobScoredMap[jobIdStr] = true;
+                  queueTx(
+                    () => registryContract.updateEmployerStats(jobId, employer, 4, 0),
+                    `JobClosed: Apply cancellation penalty for employer ${employer} (Job ${jobIdStr})`
+                  );
                }
             }
           } catch (logErr: any) {
-            console.error(`[Indexer] Failed to process log at block ${log.blockNumber}:`, logErr.message);
+            console.error(`[Indexer] Log error at block ${log.blockNumber}:`, logErr.message);
           }
         }
       } catch (err: any) {
-        console.error(`[Indexer] getLogs error:`, err.message);
+        console.error(`[Indexer] Log processing error:`, err.message);
         throw err;
       }
     }
@@ -388,12 +378,6 @@ async function startServer() {
       try {
         const currentBlock = await provider.getBlockNumber();
         
-        if (lastProcessedBlock === undefined) {
-          // Look back 5000 blocks to catch recent missed events (e.g. if server was down)
-          lastProcessedBlock = Math.max(0, currentBlock - 5000);
-          console.log(`[Indexer] Initialized. Starting sync from history: block ${lastProcessedBlock} (current ${currentBlock})`);
-        }
-
         if (currentBlock > lastProcessedBlock) {
           // Safety cap: process in chunks of 5000 blocks
           const targetBlock = Math.min(currentBlock, lastProcessedBlock + 5000);
@@ -418,8 +402,32 @@ async function startServer() {
     }
 
     // Initialize block number and start interval
-    console.log("[Indexer] Initializing event sync...");
-    setInterval(poll, 15000); // 15 second poll interval for stability
+    async function startIndexer() {
+      console.log("[Indexer] Starting ArcProof Indexer...");
+      try {
+        const currentBlock = await provider.getBlockNumber();
+        // Initial deep sync to populate identity maps (50k block lookback for stability)
+        const lookback = 50000;
+        let startBlock = currentBlock > lookback ? currentBlock - lookback : 0;
+        
+        console.log(`[Indexer] Executing deep sync from block ${startBlock} to ${currentBlock}...`);
+        
+        const CHUNK_SIZE = 5000;
+        for (let i = startBlock; i < currentBlock; i += CHUNK_SIZE) {
+          const toBlock = Math.min(i + CHUNK_SIZE - 1, currentBlock);
+          await processLogs(i, toBlock);
+        }
+        
+        lastProcessedBlock = currentBlock;
+        console.log(`[Indexer] Deep sync complete at block ${lastProcessedBlock}. Real-time polling enabled.`);
+        setInterval(poll, 15000);
+      } catch (err: any) {
+        console.error("[Indexer] Indexer bootstrap failed:", err.message);
+        setTimeout(startIndexer, 30000);
+      }
+    }
+
+    startIndexer();
 
   // --- Vite Middleware ---
 
