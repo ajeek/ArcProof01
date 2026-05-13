@@ -23,6 +23,7 @@ import {
   ExternalLink,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   Loader2,
   Paperclip,
   Link,
@@ -38,6 +39,7 @@ import {
   useConnect, 
   useDisconnect, 
   useReadContract, 
+  useReadContracts,
   useWriteContract, 
   useWaitForTransactionReceipt,
   useWatchContractEvent,
@@ -231,6 +233,100 @@ const Button = ({
   );
 };
 
+// --- Types & Constants ---
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface InteractionState {
+  accessRequests: Record<string, boolean>;
+  keysSubmitted: Record<string, { backendKeys: string; repoAccess: string; submittedAt: number }>;
+  assets: Record<string, string>;
+}
+
+interface AlertConfig {
+  title: string;
+  message: string;
+  type: 'info' | 'error' | 'success';
+  onConfirm?: () => void;
+  onCancel?: () => void;
+  showCancel?: boolean;
+}
+
+// --- App Context ---
+
+const AppContext = React.createContext<{
+  interactionState: InteractionState;
+  setInteractionState: React.Dispatch<React.SetStateAction<InteractionState>>;
+  alert: (config: AlertConfig) => void;
+  jobsData: Record<string, any>;
+  jobIdentities: Record<string, { employer: string; developer: string }>;
+  allJobs: bigint[];
+  refetchJobs: () => void;
+  derivedStats: {
+    developer: any;
+    employer: any;
+  };
+  allDerivedStats: Record<string, { developer: any; employer: any }>;
+  isReinitializing: boolean;
+} | null>(null);
+
+function useAppContext() {
+  const context = React.useContext(AppContext);
+  if (!context) throw new Error("useAppContext must be used within AppProvider");
+  return context;
+}
+
+// --- UI Components ---
+
+function GlobalAlertModal({ config, onClose }: { config: AlertConfig, onClose: () => void }) {
+  return (
+    <AnimatePresence>
+      <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-arc-ink/40 backdrop-blur-sm">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.9, y: 20 }}
+          className="max-w-md w-full bg-white rounded-3xl p-8 border border-arc-line shadow-2xl space-y-6"
+        >
+          <div className="flex items-center gap-4">
+            <div className={cn(
+              "w-12 h-12 rounded-2xl flex items-center justify-center",
+              config.type === 'error' ? "bg-red-50 text-red-500" : 
+              config.type === 'success' ? "bg-emerald-50 text-emerald-500" : "bg-arc-ink/5 text-arc-ink"
+            )}>
+              {config.type === 'error' ? <XCircle className="w-6 h-6" /> : 
+               config.type === 'success' ? <CircleCheck className="w-6 h-6" /> : <ShieldCheck className="w-6 h-6" />}
+            </div>
+            <h3 className="text-xl font-bold tracking-tight text-arc-ink">{config.title}</h3>
+          </div>
+          <p className="text-arc-ink/60 text-sm leading-relaxed">{config.message}</p>
+          <div className="flex gap-3">
+            {config.showCancel && (
+              <Button variant="secondary" onClick={() => { config.onCancel?.(); onClose(); }} className="flex-1">
+                Cancel
+              </Button>
+            )}
+            <Button 
+              variant={config.type === 'error' ? 'danger' : 'primary'} 
+              onClick={() => { config.onConfirm?.(); onClose(); }} 
+              className="flex-1"
+            >
+              Confirm
+            </Button>
+          </div>
+        </motion.div>
+      </div>
+    </AnimatePresence>
+  );
+}
+
 // --- Main Application ---
 
 export default function App() {
@@ -239,7 +335,8 @@ export default function App() {
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   const { switchChain } = useSwitchChain();
-  
+  const publicClient = usePublicClient();
+
   const [activeTab, setActiveTab] = useState<'developer' | 'employer'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('arc_active_mode');
@@ -248,39 +345,116 @@ export default function App() {
     return 'developer';
   });
 
-  const [jobIdentities, setJobIdentities] = useState<Record<string, { employer: string, developer: string }>>({});
-  const publicClient = usePublicClient();
+  const [alertConfig, setAlertConfig] = useState<AlertConfig | null>(null);
+  const [interactionState, setInteractionState] = useState<InteractionState>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('arc_interaction_state');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          console.error("Failed to parse interaction state", e);
+        }
+      }
+    }
+    return {
+      accessRequests: {},
+      keysSubmitted: {},
+      assets: {}
+    };
+  });
 
-  // --- Strict Event-Driven Identity Sourcing ---
+  useEffect(() => {
+    localStorage.setItem('arc_interaction_state', JSON.stringify(interactionState));
+  }, [interactionState]);
+
+  const [jobIdentities, setJobIdentities] = useState<Record<string, { employer: string, developer: string }>>({});
+  const [allJobs, setAllJobs] = useState<bigint[]>([]);
+
+  // Batch Job Data fetcher
+  const { data: jobCount, refetch: refetchJobCount } = useReadContract({
+    address: JOB_ESCROW_ADDRESS,
+    abi: JOB_ESCROW_ABI,
+    functionName: 'jobCount',
+  });
+
+  useEffect(() => {
+    if (jobCount) {
+      const ids = [];
+      for (let i = BigInt(1); i <= (jobCount as bigint); i++) {
+        ids.push(i);
+      }
+      setAllJobs(ids.reverse());
+    }
+  }, [jobCount]);
+
+  const { data: jobsRawData, refetch: refetchJobsRaw } = useReadContracts({
+    contracts: allJobs.map(id => ({
+      address: JOB_ESCROW_ADDRESS,
+      abi: JOB_ESCROW_ABI,
+      functionName: 'jobs',
+      args: [id],
+    })),
+    query: { enabled: allJobs.length > 0 }
+  });
+
+  const jobsData = useMemo(() => {
+    const map: Record<string, any> = {};
+    if (!jobsRawData) return map;
+    allJobs.forEach((id, index) => {
+      const res = jobsRawData[index];
+      if (res.status === 'success' && res.result) {
+        map[id.toString()] = res.result;
+      }
+    });
+    return map;
+  }, [jobsRawData, allJobs]);
+
+  const handleAlert = useCallback((config: AlertConfig) => {
+    setAlertConfig(config);
+  }, []);
+
+  const refetchJobs = useCallback(() => {
+    refetchJobCount();
+    refetchJobsRaw();
+    queryClient.invalidateQueries({ queryKey: [JOB_ESCROW_ADDRESS] });
+  }, [refetchJobCount, refetchJobsRaw, queryClient]);
+
+  // Sync Job Identities from events
   useEffect(() => {
     async function syncJobIdentities() {
       if (!publicClient) return;
       try {
         const currentBlock = await publicClient.getBlockNumber();
-        const startBlock = currentBlock > BigInt(5000) ? currentBlock - BigInt(5000) : BigInt(0);
-
-        const logs = await publicClient.getLogs({
-          address: JOB_ESCROW_ADDRESS,
-          event: {
-            type: 'event',
-            name: 'JobCreated',
-            inputs: [
-              { type: 'uint256', name: 'jobId', indexed: true },
-              { type: 'address', name: 'employer', indexed: true },
-              { type: 'address', name: 'developer', indexed: true },
-              { type: 'uint256', name: 'amount' },
-              { type: 'uint256', name: 'upfrontPercent' }
-            ]
-          },
-          fromBlock: startBlock,
-          toBlock: currentBlock
-        });
-
+        const CHUNK_SIZE = 5000n;
+        const deploymentBlock = 0n; // Use deployment block in production
+        
         const mapping: Record<string, { employer: string, developer: string }> = {};
-        logs.forEach(log => {
-          const { jobId, employer, developer } = log.args as any;
-          mapping[jobId.toString()] = { employer, developer };
-        });
+
+        for (let i = deploymentBlock; i < currentBlock; i += CHUNK_SIZE) {
+          const toBlock = i + CHUNK_SIZE - 1n > currentBlock ? currentBlock : i + CHUNK_SIZE - 1n;
+          const logs = await publicClient.getLogs({
+            address: JOB_ESCROW_ADDRESS,
+            event: {
+              type: 'event',
+              name: 'JobCreated',
+              inputs: [
+                { type: 'uint256', name: 'jobId', indexed: true },
+                { type: 'address', name: 'employer', indexed: true },
+                { type: 'address', name: 'developer', indexed: true },
+                { type: 'uint256', name: 'amount' },
+                { type: 'uint256', name: 'upfrontPercent' }
+              ]
+            },
+            fromBlock: i,
+            toBlock: toBlock
+          });
+
+          logs.forEach(log => {
+            const { jobId, employer, developer } = log.args as any;
+            mapping[jobId.toString()] = { employer, developer };
+          });
+        }
         setJobIdentities(prev => ({ ...prev, ...mapping }));
       } catch (err) {
         console.error("Failed to sync job identities from events", err);
@@ -300,6 +474,7 @@ export default function App() {
         mapping[jobId.toString()] = { employer, developer };
       });
       setJobIdentities(prev => ({ ...prev, ...mapping }));
+      refetchJobs();
     },
   });
 
@@ -312,46 +487,12 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('arc_active_mode', activeTab);
   }, [activeTab]);
+
   const [selectedJobId, setSelectedJobId] = useState<bigint | null>(null);
   const [lastCreatedJobId, setLastCreatedJobId] = useState<bigint | null>(null);
   const [autoFlowJobId, setAutoFlowJobId] = useState<bigint | null>(null);
   const [successHash, setSuccessHash] = useState<string | null>(null);
   const [isCreatingJob, setIsCreatingJob] = useState(false);
-  const [allJobs, setAllJobs] = useState<bigint[]>([]);
-
-  // Fetch all JobCreated events for discovery
-  const { data: jobCount, refetch: refetchJobCount } = useReadContract({
-    address: JOB_ESCROW_ADDRESS,
-    abi: JOB_ESCROW_ABI,
-    functionName: 'jobCount',
-  });
-
-  useEffect(() => {
-    if (jobCount) {
-      const ids = [];
-      for (let i = BigInt(1); i <= (jobCount as bigint); i++) {
-        ids.push(i);
-      }
-      setAllJobs(ids.reverse());
-    }
-  }, [jobCount]);
-
-  // Contract Reads: Global Stats or Profile
-  const { data: registryProfile, refetch: refetchProfile } = useReadContract({
-    address: REPUTATION_REGISTRY_ADDRESS,
-    abi: REPUTATION_REGISTRY_ABI,
-    functionName: 'getFullProfile',
-    args: address ? [address] : undefined,
-    query: { enabled: !!address }
-  });
-
-  const { data: employerRegistryProfile, refetch: refetchEmployerProfile } = useReadContract({
-    address: REPUTATION_REGISTRY_ADDRESS,
-    abi: REPUTATION_REGISTRY_ABI,
-    functionName: 'getEmployerFullProfile',
-    args: address ? [address] : undefined,
-    query: { enabled: !!address }
-  });
 
   const { data: usdcBalance, refetch: refetchUSDC } = useReadContract({
     address: USDC_ADDRESS,
@@ -361,10 +502,6 @@ export default function App() {
     query: { enabled: !!address }
   });
 
-  const { writeContractAsync } = useWriteContract();
-  const [bindHash, setBindHash] = useState<`0x${string}` | undefined>();
-  const { isSuccess: isBindConfirmed } = useWaitForTransactionReceipt({ hash: bindHash, confirmations: 1 });
-
   const { data: linkedGithub, refetch: refetchGithub } = useReadContract({
     address: REPUTATION_REGISTRY_ADDRESS,
     abi: REPUTATION_REGISTRY_ABI,
@@ -373,26 +510,37 @@ export default function App() {
     query: { enabled: !!address }
   });
 
+  const { writeContractAsync } = useWriteContract();
+  const [bindHash, setBindHash] = useState<`0x${string}` | undefined>();
+  const { isSuccess: isBindConfirmed } = useWaitForTransactionReceipt({ hash: bindHash, confirmations: 1 });
+
   const handleResetGithub = async () => {
     if (!address) return;
-    if (!confirm("Are you sure you want to unlink your GitHub account? This will reset your reputation data on-chain.")) return;
-
-    try {
-      const res = await fetch('/api/github-reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ walletAddress: address }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        refetchGithub();
-      } else {
-        alert(data.error || "Failed to reset GitHub link");
+    
+    handleAlert({
+      title: "Unlink Identity",
+      message: "Are you sure you want to unlink your GitHub account? This will reset your reputation data on-chain.",
+      type: "info",
+      showCancel: true,
+      onConfirm: async () => {
+        try {
+          const res = await fetch('/api/github-reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ walletAddress: address }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            refetchGithub();
+          } else {
+            handleAlert({ title: "Reset Failed", message: data.error || "Failed to reset GitHub link", type: "error" });
+          }
+        } catch (err) {
+          console.error(err);
+          handleAlert({ title: "Reset Failed", message: "Connection failure during reset", type: "error" });
+        }
       }
-    } catch (err) {
-      console.error(err);
-      alert("Connection failure during reset");
-    }
+    });
   };
 
   useEffect(() => {
@@ -403,13 +551,22 @@ export default function App() {
     }
   }, [isBindConfirmed, refetchGithub]);
 
+  // Consolidated Watchers for General UI updates
   useWatchContractEvent({
     address: REPUTATION_REGISTRY_ADDRESS,
     abi: REPUTATION_REGISTRY_ABI,
     eventName: 'ReputationUpdated',
+    onLogs() { 
+      refetchGithub();
+    }
+  });
+
+  useWatchContractEvent({
+    address: REPUTATION_REGISTRY_ADDRESS,
+    abi: REPUTATION_REGISTRY_ABI,
+    eventName: 'EmployerReputationUpdated',
     onLogs() {
-      console.log("[App] ReputationUpdated event detected. Refetching profile...");
-      refetchProfile();
+      refetchGithub();
     }
   });
 
@@ -417,9 +574,8 @@ export default function App() {
     address: REPUTATION_REGISTRY_ADDRESS,
     abi: REPUTATION_REGISTRY_ABI,
     eventName: 'StatsUpdated',
-    onLogs() {
-      console.log("[App] StatsUpdated event detected. Refetching profile...");
-      refetchProfile();
+    onLogs() { 
+      refetchGithub();
     }
   });
 
@@ -428,48 +584,67 @@ export default function App() {
     abi: JOB_ESCROW_ABI,
     eventName: 'PaymentReleased',
     onLogs() {
-      console.log("[App] PaymentReleased event detected. Refetching profile and USDC...");
-      setTimeout(() => {
-        refetchProfile();
-        refetchUSDC();
-      }, 2000); // Wait for indexer to process
+      refetchUSDC();
+      refetchJobs();
     }
   });
 
-  // Identity Onboarding State
+  useWatchContractEvent({
+    address: JOB_ESCROW_ADDRESS,
+    abi: JOB_ESCROW_ABI,
+    eventName: 'WorkSubmitted',
+    onLogs() { refetchJobs(); }
+  });
+
+  useWatchContractEvent({
+    address: JOB_ESCROW_ADDRESS,
+    abi: JOB_ESCROW_ABI,
+    eventName: 'JobAssigned',
+    onLogs() { refetchJobs(); }
+  });
+
+  useWatchContractEvent({
+    address: JOB_ESCROW_ADDRESS,
+    abi: JOB_ESCROW_ABI,
+    eventName: 'DisputeOpened',
+    onLogs() { 
+      refetchJobs(); 
+    }
+  });
+
+  useWatchContractEvent({
+    address: JOB_ESCROW_ADDRESS,
+    abi: JOB_ESCROW_ABI,
+    eventName: 'DisputeResolved',
+    onLogs() { 
+      refetchJobs(); 
+    }
+  });
+
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState<'entry' | 'verifying' | 'preview' | 'binding'>('entry');
   const [githubPreview, setGithubPreview] = useState<any>(null);
   const [isBinding, setIsBinding] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
-  const [rejectionReason, setRejectionReason] = useState("");
-  const [showRejectionInput, setShowRejectionInput] = useState(false);
   const [onboardingGithub, setOnboardingGithub] = useState('');
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Only show onboarding if the wallet is connected and we have confirmed
-    // that there is NO linked GitHub on-chain (linkedGithub === "").
-    // If linkedGithub is undefined, it means the query is still loading.
     if (isConnected && (linkedGithub === "" || linkedGithub === "0x0000000000000000000000000000000000000000")) {
       setShowOnboarding(true);
       if (onboardingStep === 'binding' && !isBinding) {
-        // Reset if we somehow got stuck
         setOnboardingStep('entry');
       }
     } else if (linkedGithub !== "" && linkedGithub !== undefined && linkedGithub !== "0x0000000000000000000000000000000000000000") {
-      // User is already linked on-chain, definitely hide onboarding
       setShowOnboarding(false);
     } else if (!isConnected) {
-      // Not connected, hide onboarding and reset state for next session
       setShowOnboarding(false);
       setOnboardingStep('entry');
       setGithubPreview(null);
       setOnboardingGithub('');
     }
-  }, [isConnected, linkedGithub]);
+  }, [isConnected, linkedGithub, onboardingStep, isBinding]);
 
-  // Handle auto-flow trigger from creation
   const handleJobCreated = useCallback((id: bigint, params?: any) => {
     setLastCreatedJobId(id);
     setAutoFlowJobId(id);
@@ -477,10 +652,8 @@ export default function App() {
       setCreatedJobData((prev: any) => ({ ...prev, ...params, id }));
       setCreationStatus('funding');
     }
-    // Refresh job list
-    refetchJobCount();
-    queryClient.invalidateQueries({ queryKey: [JOB_ESCROW_ADDRESS] });
-  }, [refetchJobCount, queryClient]);
+    refetchJobs();
+  }, [refetchJobs]);
 
   const handleJobCreationStart = useCallback((params: any) => {
     setCreatedJobData(params);
@@ -515,7 +688,6 @@ export default function App() {
     setIsBinding(true);
     setOnboardingError(null);
     try {
-      // 1. Trigger Direct Binding via Backend Indexer (more reliable than signature)
       const res = await fetch('/api/github-bind', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -530,17 +702,13 @@ export default function App() {
         return;
       }
 
-      // 2. Track the transaction returned by the server
       if (data.txHash) {
-        console.log("[GitHub Bind] Server initiated transaction:", data.txHash);
         setBindHash(data.txHash);
       } else {
-        // Fallback for immediate success
         refetchGithub();
         setShowOnboarding(false);
       }
     } catch (err: any) {
-      console.error("[GitHub Bind] Error:", err);
       setOnboardingError(err.message || "Connection failure during binding");
       setOnboardingStep('preview');
     } finally {
@@ -548,104 +716,313 @@ export default function App() {
     }
   };
 
-  // Event Watcher for Job Lifecycle Updates
-  useWatchContractEvent({
-    address: JOB_ESCROW_ADDRESS,
-    abi: JOB_ESCROW_ABI,
-    eventName: 'Refunded',
-    onLogs() {
-      queryClient.invalidateQueries();
-    },
-  });
-
-  useWatchContractEvent({
-    address: JOB_ESCROW_ADDRESS,
-    abi: JOB_ESCROW_ABI,
-    eventName: 'JobClosed',
-    onLogs() {
-      queryClient.invalidateQueries();
-    },
-  });
-
-  useWatchContractEvent({
-    address: JOB_ESCROW_ADDRESS,
-    abi: JOB_ESCROW_ABI,
-    eventName: 'DisputeOpened',
-    onLogs() {
-      queryClient.invalidateQueries();
-    },
-  });
-
-  // Event Watcher for Job Creation (Explicit Polling)
-  useWatchContractEvent({
-    address: JOB_ESCROW_ADDRESS,
-    abi: JOB_ESCROW_ABI,
-    eventName: 'JobCreated',
-    pollingInterval: 2000, // 2s polling for fast feedback
-    onLogs(logs) {
-      refetchJobCount();
-      const newJobs = logs.map((log: any) => log.args.jobId);
-      setAllJobs(prev => {
-        const combined = [...newJobs, ...prev]; // Prepend new jobs
-        return Array.from(new Set(combined)); // Remove duplicates
-      });
-
-      if (logs.length > 0) {
-        const log = logs[logs.length - 1] as any;
-        if (log.args.employer === address) {
-          const jobId = log.args.jobId;
-          setLastCreatedJobId(jobId);
-          if (isCreatingJob) {
-            setAutoFlowJobId(jobId);
-            setIsCreatingJob(false);
-          }
-        } else if (log.args.developer === address) {
-          setLastCreatedJobId(log.args.jobId);
-        }
-      }
-    },
-  });
-
-  const stats = useMemo(() => {
-    if (!registryProfile) return { score: 0, profile: null, tier: 'Rookie' };
-    const [profile, reputation] = registryProfile as [any, any];
-    const score = reputation?.coreIndex ?? (Array.isArray(reputation) ? reputation[4] : 0);
-    const tier = reputation?.tier ?? (Array.isArray(reputation) ? reputation[5] : 'Rookie');
-    return {
-      score: Number(score) || 0,
-      profile: profile,
-      tier: tier || 'Rookie'
-    };
-  }, [registryProfile]);
-
-  const employerStats = useMemo(() => {
-    if (!employerRegistryProfile) return { score: 0, profile: null, tier: 'Rookie' };
-    const [profile, score, tier] = employerRegistryProfile as [any, any, string];
-    return {
-      score: Number(score) || 0,
-      profile: profile,
-      tier: tier || 'Rookie'
-    };
-  }, [employerRegistryProfile]);
-
-  const activeJobs = useMemo(() => {
-    // This will be filtered in the JobExplorer component or by passing a list
-    // For now we just track that we need to pass this state down.
-    return 0; // Placeholder
-  }, []);
+  const [resolutionHistory, setResolutionHistory] = useState<Record<string, { winner: 'dev' | 'emp' }>>({});
+  const [isReinitializing, setIsReinitializing] = useState(false);
+  const prevAddress = useRef(address);
 
   useEffect(() => {
-    if (selectedJobId && activeTab === 'developer') {
-      const identity = jobIdentities[selectedJobId.toString()];
-      if (identity && identity.employer.toLowerCase() === address?.toLowerCase()) {
-        setSelectedJobId(null);
-      }
+    if (address !== prevAddress.current) {
+      setIsReinitializing(true);
+      prevAddress.current = address;
+      setTimeout(() => setIsReinitializing(false), 1000);
     }
-  }, [activeTab, selectedJobId, jobIdentities, address]);
+  }, [address]);
+
+  // Historical Event Indexer (Deterministic)
+  useEffect(() => {
+    if (!publicClient || !address) return;
+    
+    const fetchDisputeHistory = async () => {
+      try {
+        const currentBlock = await publicClient.getBlockNumber();
+        const CHUNK_SIZE = 5000n;
+        const deploymentBlock = 0n; // Ideally set to contract deployment block
+        
+        let history: Record<string, { winner: 'dev' | 'emp' }> = {};
+        
+        // Fetch in chunks to avoid RPC limits
+        for (let i = deploymentBlock; i < currentBlock; i += CHUNK_SIZE) {
+          const toBlock = i + CHUNK_SIZE - 1n > currentBlock ? currentBlock : i + CHUNK_SIZE - 1n;
+          const logs = await publicClient.getLogs({
+            address: JOB_ESCROW_ADDRESS,
+            event: {
+              type: 'event',
+              name: 'DisputeResolved',
+              inputs: [
+                { type: 'uint256', name: 'jobId', indexed: true },
+                { type: 'bool', name: 'favorDeveloper' }
+              ]
+            },
+            fromBlock: i,
+            toBlock: toBlock
+          });
+
+          logs.forEach(log => {
+            if (log.args && log.args.jobId !== undefined) {
+               history[log.args.jobId.toString()] = { 
+                 winner: log.args.favorDeveloper ? 'dev' : 'emp' 
+               };
+            }
+          });
+        }
+        
+        setResolutionHistory(history);
+      } catch (err) {
+        console.error("Dispute history sync failed:", err);
+      }
+    };
+
+    fetchDisputeHistory();
+  }, [publicClient, address, allJobs.length]);
+
+  useWatchContractEvent({
+    address: JOB_ESCROW_ADDRESS,
+    abi: JOB_ESCROW_ABI,
+    eventName: 'DisputeResolved',
+    onLogs(logs) {
+      const mapping: Record<string, { winner: 'dev' | 'emp' }> = {};
+      logs.forEach(log => {
+        const { jobId, favorDeveloper } = log.args as any;
+        if (jobId !== undefined) {
+          mapping[jobId.toString()] = { winner: favorDeveloper ? 'dev' : 'emp' };
+        }
+      });
+      setResolutionHistory(prev => ({ ...prev, ...mapping }));
+      refetchJobs();
+    },
+  });
+
+  // Wallet safe state handling
+  useEffect(() => {
+    if (address) {
+      // Clear event-driven local states
+      setJobIdentities({});
+      setResolutionHistory({});
+      
+      // Trigger full refetch
+      refetchJobs();
+      refetchUSDC();
+      refetchGithub();
+    }
+  }, [address]);
+
+  // --- Generalized Deterministic Reputation Engine ---
+  const allDerivedStats = useMemo(() => {
+    const statsMap: Record<string, { developer: any; employer: any }> = {};
+
+    const getInitialStats = () => ({
+      developer: {
+        completed: 0, failed: 0, earned: 0n, disputesWon: 0, disputesLost: 0, active: 0, totalJobs: 0,
+        score: 0, tier: 'Unrated', completionRate: 0, disputePerformance: 0, earningsStability: 0, rated: false
+      },
+      employer: {
+        funded: 0, completed: 0, cancelled: 0, disputes: 0, disputesWon: 0, disputesLost: 0, paid: 0n, active: 0,
+        score: 0, tier: 'Unrated', fundingEfficiency: 0, fairnessIndex: 100, disputeQuality: 0, escrowStability: 0, rated: false
+      }
+    });
+
+    Object.entries(jobsData).forEach(([id, job]) => {
+      const jobArray = job as any[];
+      if (!jobArray || jobArray.length < 6) return;
+
+      const employerAddr = (jobArray[0] || "").toString().toLowerCase();
+      const developerAddr = (jobArray[1] || "").toString().toLowerCase();
+      
+      if (employerAddr && employerAddr !== zeroAddress) {
+        if (!statsMap[employerAddr]) statsMap[employerAddr] = getInitialStats();
+        const emp = statsMap[employerAddr].employer;
+        const status = Number(jobArray[5]);
+        const amount = BigInt(jobArray[2] || 0n);
+        const res = resolutionHistory[id];
+
+        emp.funded++;
+        if (status === 4) { // COMPLETED
+          emp.completed++;
+          emp.paid += amount;
+          if (res) {
+            emp.disputes++;
+            if (res.winner === 'dev') emp.disputesLost++;
+            else emp.disputesWon++;
+          }
+        } else if (status === 6) { // CANCELLED
+          emp.cancelled++;
+          if (res) {
+            emp.disputes++;
+            if (res.winner === 'emp') emp.disputesWon++;
+            else emp.disputesLost++;
+          }
+        } else if (status === 5) { // DISPUTED
+          emp.disputes++;
+          emp.active++;
+        } else if ([1, 2, 3, 8].includes(status)) {
+          emp.active++;
+        }
+      }
+
+      if (developerAddr && developerAddr !== zeroAddress) {
+        if (!statsMap[developerAddr]) statsMap[developerAddr] = getInitialStats();
+        const dev = statsMap[developerAddr].developer;
+        const status = Number(jobArray[5]);
+        const amount = BigInt(jobArray[2] || 0n);
+        const res = resolutionHistory[id];
+
+        dev.totalJobs++;
+        if (status === 4) { // COMPLETED
+          dev.completed++;
+          dev.earned += amount;
+          if (res) {
+            if (res.winner === 'dev') dev.disputesWon++;
+            else dev.disputesLost++;
+          }
+        } else if (status === 7) { // REJECTED
+          dev.failed++;
+        } else if (status === 6) { // CANCELLED
+          if (res) {
+            if (res.winner === 'emp') dev.disputesLost++;
+            else dev.disputesWon++;
+          } else {
+            dev.failed++;
+          }
+        } else if (status === 5) { // DISPUTED
+          dev.active++;
+        } else if ([2, 3, 8].includes(status)) {
+          dev.active++;
+        }
+      }
+    });
+
+    // Finalize all scores using deterministic formulas
+    const MAX_EARNINGS = 10000;
+
+    Object.values(statsMap).forEach(({ developer: dev, employer: emp }) => {
+      // Developer Scoring (Execution System)
+      const devT = dev.totalJobs || 0;
+      
+      if (devT < 3) {
+        dev.score = 0;
+        dev.tier = 'Unrated';
+        dev.rated = false;
+        dev.completionRate = 0;
+        dev.disputePerformance = 0;
+        dev.earningsStability = 0;
+      } else {
+        const devCR = (dev.completed + dev.disputesWon) / devT;
+        const devDisputesTotal = dev.disputesWon + dev.disputesLost;
+        const devDP = devDisputesTotal > 0 ? dev.disputesWon / devDisputesTotal : 1;
+        const devE = Number(formatUnits(dev.earned, USDC_DECIMALS));
+        const devER = Math.log(1 + devE) / Math.log(1 + MAX_EARNINGS);
+
+        dev.completionRate = Math.min(100, Math.floor(devCR * 100));
+        dev.disputePerformance = Math.min(100, Math.floor(devDP * 100));
+        dev.earningsStability = Math.min(100, Math.floor(devER * 100));
+        dev.rated = true;
+
+        dev.score = Math.floor((0.50 * dev.completionRate) + (0.30 * dev.disputePerformance) + (0.20 * dev.earningsStability));
+        
+        if (dev.score >= 85) dev.tier = 'Elite';
+        else if (dev.score >= 65) dev.tier = 'Proven';
+        else if (dev.score >= 40) dev.tier = 'Reliable';
+        else dev.tier = 'Rookie';
+      }
+
+      // Employer Scoring (Capital + Fairness System)
+      const empF = emp.funded || 0;
+      
+      if (empF < 3) {
+        emp.score = 0;
+        emp.tier = 'Unrated';
+        emp.rated = false;
+        emp.fundingEfficiency = 0;
+        emp.fairnessIndex = 100;
+        emp.disputeQuality = 0;
+        emp.escrowStability = 0;
+      } else {
+        const empFE = emp.completed / empF;
+        const empFI = 1 - (emp.disputes / empF);
+        const empDisputesTotal = emp.disputesWon + emp.disputesLost;
+        const empDQ = empDisputesTotal > 0 ? emp.disputesWon / empDisputesTotal : 1;
+        const empEscrow = Number(formatUnits(emp.paid, USDC_DECIMALS));
+        const empES = Math.log(1 + empEscrow) / Math.log(1 + MAX_EARNINGS);
+
+        emp.fundingEfficiency = Math.min(100, Math.floor(empFE * 100));
+        emp.fairnessIndex = Math.min(100, Math.floor(empFI * 100));
+        emp.disputeQuality = Math.min(100, Math.floor(empDQ * 100));
+        emp.escrowStability = Math.min(100, Math.floor(empES * 100));
+        emp.rated = true;
+
+        emp.score = Math.floor(
+          (0.45 * emp.fundingEfficiency) + 
+          (0.25 * emp.fairnessIndex) + 
+          (0.20 * emp.disputeQuality) + 
+          (0.10 * emp.escrowStability)
+        );
+        
+        if (emp.score >= 85) emp.tier = 'Diamond';
+        else if (emp.score >= 65) emp.tier = 'Gold';
+        else if (emp.score >= 40) emp.tier = 'Silver';
+        else emp.tier = 'Bronze';
+      }
+    });
+
+    return statsMap;
+  }, [jobsData, resolutionHistory]);
+
+  const derivedStats = useMemo(() => {
+    const defaultStats = {
+      developer: {
+        completed: 0, failed: 0, earned: 0n, disputesWon: 0, disputesLost: 0, active: 0, totalJobs: 0,
+        score: 0, tier: 'Unrated', completionRate: 0, disputePerformance: 0, earningsStability: 0, rated: false
+      },
+      employer: {
+        funded: 0, completed: 0, cancelled: 0, disputes: 0, disputesWon: 0, disputesLost: 0, paid: 0n, active: 0,
+        score: 0, tier: 'Unrated', fundingEfficiency: 0, fairnessIndex: 100, disputeQuality: 0, escrowStability: 0, rated: false
+      }
+    };
+    if (!address) return defaultStats;
+    return allDerivedStats[address.toLowerCase()] || defaultStats;
+  }, [allDerivedStats, address]);
+
+
+  const contextValue = useMemo(() => ({
+    interactionState,
+    setInteractionState,
+    alert: handleAlert,
+    jobsData,
+    jobIdentities,
+    allJobs,
+    refetchJobs,
+    derivedStats,
+    allDerivedStats,
+    isReinitializing,
+    resolutionHistory
+  }), [interactionState, handleAlert, jobsData, jobIdentities, allJobs, refetchJobs, derivedStats, allDerivedStats, isReinitializing, resolutionHistory]);
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* Navigation */}
+    <AppContext.Provider value={contextValue}>
+      <AnimatePresence>
+        {isReinitializing && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-arc-paper/90 backdrop-blur-md flex flex-col items-center justify-center"
+          >
+            <div className="flex flex-col items-center gap-6">
+              <div className="relative">
+                <div className="w-16 h-16 rounded-full border-4 border-arc-ink/10 border-t-arc-ink animate-spin" />
+                <ShieldCheck className="absolute inset-0 m-auto w-6 h-6 text-arc-ink animate-pulse" />
+              </div>
+              <div className="text-center space-y-2">
+                <h3 className="font-serif italic text-2xl text-arc-ink">Reinitializing Protocol</h3>
+                <p className="text-arc-ink/40 font-mono text-xs uppercase tracking-widest">Residuing event history ...</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <div className="min-h-screen flex flex-col">
+        {alertConfig && <GlobalAlertModal config={alertConfig} onClose={() => setAlertConfig(null)} />}
+        {/* Navigation */}
       <nav className="h-16 border-b border-arc-line flex items-center justify-between px-6 sticky top-0 bg-arc-paper/80 backdrop-blur-xl z-50">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-arc-ink rounded-lg flex items-center justify-center">
@@ -964,7 +1341,7 @@ export default function App() {
                       <div>
                         <div className="text-[11px] uppercase tracking-widest text-arc-ink/40 font-bold mb-1">Reputation Tier</div>
                         <div className="text-4xl font-serif italic text-arc-ink/80 mb-6">
-                          {activeTab === 'developer' ? stats.tier : employerStats.tier}
+                          {activeTab === 'developer' ? derivedStats.developer.tier : derivedStats.employer.tier}
                         </div>
                         <div className="pt-4 border-t border-arc-line flex items-baseline gap-4">
                            <div className="flex items-center gap-2">
@@ -972,7 +1349,7 @@ export default function App() {
                              <span className="text-arc-ink/20 font-mono text-xs">=&gt;</span>
                            </div>
                            <span className="text-4xl font-mono text-arc-ink font-light tracking-tighter">
-                             {activeTab === 'developer' ? stats.score : employerStats.score}
+                             {activeTab === 'developer' ? derivedStats.developer.score : derivedStats.employer.score}
                            </span>
                         </div>
                       </div>
@@ -1017,8 +1394,8 @@ export default function App() {
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-6"
                     >
-                      <DeveloperProfile address={address!} allJobs={allJobs} onSelect={setSelectedJobId} jobIdentities={jobIdentities} />
-                      <JobExplorer address={address!} role="developer" allJobs={allJobs} onSelect={setSelectedJobId} jobIdentities={jobIdentities} />
+                      <DeveloperProfile address={address!} onSelect={setSelectedJobId} />
+                      <JobExplorer address={address!} role="developer" onSelect={setSelectedJobId} />
                     </motion.div>
                   ) : (
                     <motion.div 
@@ -1081,8 +1458,10 @@ export default function App() {
                             initial={{ opacity: 0, scale: 0.98 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.98 }}
+                            className="space-y-8"
                           >
-                             <JobExplorer address={address!} role="employer" allJobs={allJobs} onSelect={setSelectedJobId} jobIdentities={jobIdentities} />
+                             <EmployerProfile address={address!} onSelect={setSelectedJobId} />
+                             <JobExplorer address={address!} role="employer" onSelect={setSelectedJobId} />
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -1306,7 +1685,8 @@ export default function App() {
            </div>
         </div>
       </footer>
-    </div>
+      </div>
+    </AppContext.Provider>
   );
 }
 
@@ -1548,6 +1928,7 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
 }
 
 function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationError }: { onJobCreated: (id: bigint, params?: any) => void, onCreating: (state: boolean) => void, onCreationStart: (params: any) => void, onCreationError: (error: string) => void, key?: string }) {
+  const { alert } = useAppContext();
   const [devAddress, setDevAddress] = useState<string>(zeroAddress);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -1593,6 +1974,13 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
   // Extract jobId from receipt for immediate flow
   // Handle Confirmation & Parent Notification
   useEffect(() => {
+    const titleVal = title;
+    const descVal = description;
+    const reqVal = requirements;
+    const durVal = duration;
+    const amtVal = amount;
+    const upfVal = upfront;
+
     if (isConfirmed && receipt && hasProcessedReceipt.current !== receipt.transactionHash) {
       hasProcessedReceipt.current = receipt.transactionHash;
       onCreating(false);
@@ -1604,16 +1992,19 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
         });
         if (logs.length > 0) {
           const jobId = (logs[0] as any).args.jobId;
-          onJobCreated(jobId, { title, description, requirements, duration, amount, upfront });
+          onJobCreated(jobId, { title: titleVal, description: descVal, requirements: reqVal, duration: durVal, amount: amtVal, upfront: upfVal });
         }
       } catch (e) {
         console.error("Failed to parse logs from receipt", e);
       }
     }
-  }, [isConfirmed, receipt, onJobCreated, onCreating]);
+  }, [isConfirmed, receipt, onJobCreated, onCreating, title, description, requirements, duration, amount, upfront]);
 
   const handleCreate = () => {
-    if (!devAddress || !amount || !title || !description) return;
+    if (!devAddress || !amount || !title || !description) {
+      alert({ title: "Validation Error", message: "Please fill in all required fields", type: "error" });
+      return;
+    }
     
     const metadata = JSON.stringify({
       title,
@@ -1730,123 +2121,288 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
   );
 }
 
-function DeveloperProfile({ address, allJobs, onSelect, onRefresh, jobIdentities }: { address: `0x${string}`, allJobs: bigint[], onSelect: (id: bigint) => void, onRefresh?: () => void, jobIdentities: any }) {
-  const hasJobs = allJobs.length > 0;
+function CollapsibleJobGroup({ 
+  title, 
+  icon: Icon, 
+  children, 
+  count,
+  defaultOpen = false 
+}: { 
+  title: string, 
+  icon: any, 
+  children: React.ReactNode,
+  count?: number,
+  defaultOpen?: boolean
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  
+  return (
+    <div className="space-y-4">
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center justify-between w-full group transition-all hover:bg-arc-ink/5 p-2 -mx-2 rounded-xl"
+      >
+        <div className="flex items-center gap-2 px-1">
+          <Icon className={cn("w-4 h-4 transition-colors", isOpen ? "text-arc-ink" : "text-arc-ink/40")} />
+          <span className={cn("text-[10px] uppercase font-bold tracking-widest transition-colors", isOpen ? "text-arc-ink" : "text-arc-ink/40")}>
+            {title}
+          </span>
+          {count !== undefined && count > 0 && (
+            <span className="ml-2 px-1.5 py-0.5 rounded-full text-[9px] bg-arc-ink/10 text-arc-ink font-bold">
+              {count}
+            </span>
+          )}
+        </div>
+        <ChevronDown className={cn("w-3 h-3 text-arc-ink/20 transition-transform duration-300", isOpen && "rotate-180")} />
+      </button>
+      
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="overflow-hidden"
+          >
+            <div className="space-y-4 pb-2">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function EmployerProfile({ address, onSelect }: { address: `0x${string}`, onSelect: (id: bigint) => void }) {
+  const { refetchJobs, allJobs, jobIdentities, derivedStats } = useAppContext();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const profile = derivedStats.employer;
 
-  const { data: registryProfile, refetch } = useReadContract({
-    address: REPUTATION_REGISTRY_ADDRESS,
-    abi: REPUTATION_REGISTRY_ABI,
-    functionName: 'getFullProfile',
-    args: address ? [address] : undefined,
-    query: { enabled: !!address }
-  });
-
-  const handleManualRefresh = async () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-    await refetch();
-    if (onRefresh) onRefresh();
+    refetchJobs();
     setTimeout(() => setIsRefreshing(false), 1000);
   };
 
-  const [profileData, reputationData] = (registryProfile as [any, any]) || [null, null];
-  
-  const reputation = useMemo(() => {
-    if (!reputationData) return null;
-    return {
-      tier: reputationData.tier ?? (Array.isArray(reputationData) ? reputationData[5] : 'Rookie'),
-      coreIndex: reputationData.coreIndex ?? (Array.isArray(reputationData) ? reputationData[4] : 0),
-      reliabilityScore: reputationData.reliabilityScore ?? (Array.isArray(reputationData) ? reputationData[0] : 0),
-      disputeIntegrityScore: reputationData.disputeIntegrityScore ?? (Array.isArray(reputationData) ? reputationData[1] : 0),
-      earnedValueScore: reputationData.earnedValueScore ?? (Array.isArray(reputationData) ? reputationData[2] : 0),
-      activityScore: reputationData.activityScore ?? (Array.isArray(reputationData) ? reputationData[3] : 0),
-    };
-  }, [reputationData]);
+  const signals = {
+    fundingEfficiency: profile.fundingEfficiency,
+    fairnessIndex: profile.fairnessIndex,
+    disputeQuality: profile.disputeQuality,
+    escrowStability: profile.escrowStability
+  };
 
-  const profile = useMemo(() => {
-    if (!profileData) return null;
-    return {
-      completedJobs: profileData.completedJobs ?? (Array.isArray(profileData) ? profileData[0] : 0),
-      failedJobs: profileData.failedJobs ?? (Array.isArray(profileData) ? profileData[1] : 0),
-      totalEarnedUSDC: profileData.totalEarnedUSDC ?? (Array.isArray(profileData) ? profileData[2] : 0),
-      disputesWon: profileData.disputesWon ?? (Array.isArray(profileData) ? profileData[3] : 0),
-    };
-  }, [profileData]);
+  return (
+    <div className="space-y-10">
+      <div className={cn("space-y-6 transition-opacity", !profile.rated && "opacity-60")}>
+        <div className="flex items-center justify-between border-b border-arc-line pb-4">
+          <div className="flex items-center gap-3">
+            <ShieldCheck className="w-5 h-5 text-arc-ink" />
+            <h2 className="text-xl font-medium tracking-tight">Reputation Matrix</h2>
+            <div className="flex items-center gap-6 ml-4">
+              <div className="flex flex-col">
+                <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Reputation Tier</span>
+                <span className={cn("text-sm font-medium", !profile.rated ? "text-arc-ink/40" : "text-arc-ink")}>
+                  {profile.rated ? profile.tier : "Unrated"}
+                </span>
+              </div>
+              <div className="flex flex-col border-l border-arc-line pl-6">
+                <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Score</span>
+                <span className="text-sm font-bold text-arc-ink">
+                  {profile.rated ? `=> ${profile.score}` : "--"}
+                </span>
+              </div>
+            </div>
+            <button 
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-1.5 rounded-lg hover:bg-arc-ink/5 transition-colors disabled:opacity-50 ml-2"
+              title="Refresh Protocol State"
+            >
+              <RefreshCcw className={cn("w-4 h-4 text-arc-ink/40", isRefreshing && "animate-spin")} />
+            </button>
+          </div>
+          <Badge className="bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">Protocol Truth</Badge>
+        </div>
+        
+        {!profile.rated && (
+          <div className="bg-amber-500/5 border border-amber-500/10 rounded-xl p-4 flex items-center gap-3">
+             <AlertTriangle className="w-4 h-4 text-amber-500" />
+             <div className="text-xs text-amber-700 font-medium">
+               Minimum 3 funded jobs required for reputation indexing. 
+               Current: {profile.funded}/3
+             </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+          <SignalBar 
+            label="Funding Efficiency" 
+            score={signals.fundingEfficiency} 
+            colorClass="bg-blue-500" 
+          />
+          <SignalBar 
+            label="Fairness Index" 
+            score={signals.fairnessIndex} 
+            colorClass="bg-emerald-500" 
+          />
+          <SignalBar 
+            label="Dispute Quality" 
+            score={signals.disputeQuality} 
+            colorClass="bg-purple-500" 
+          />
+          <SignalBar 
+            label="Escrow Stability" 
+            score={signals.escrowStability} 
+            colorClass="bg-amber-500" 
+          />
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 pt-2">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Completed</div>
+             <div className="text-xl font-mono">{profile.completed}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Funded</div>
+             <div className="text-xl font-mono">{profile.funded}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Total Escrow</div>
+             <div className="text-xl font-mono">${Number(formatUnits(profile.paid, USDC_DECIMALS)).toLocaleString()}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Won</div>
+             <div className="text-xl font-mono text-emerald-600">+{profile.disputesWon}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Cancelled</div>
+             <div className="text-xl font-mono">{profile.cancelled}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Lost</div>
+             <div className="text-xl font-mono text-red-500">{profile.disputesLost}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSelect: (id: bigint) => void }) {
+  const { jobIdentities, allJobs, refetchJobs, jobsData, derivedStats } = useAppContext();
+  const hasJobs = allJobs.length > 0;
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const profile = derivedStats.developer;
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    refetchJobs();
+    setTimeout(() => setIsRefreshing(false), 1000);
+  };
+
+  const liveReputation = {
+    tier: profile.rated ? profile.tier : 'Unrated',
+    coreIndex: profile.score,
+    completionRate: profile.completionRate,
+    disputePerformance: profile.disputePerformance,
+    earningsStability: profile.earningsStability,
+    activityScore: 100
+  };
+
+  const counts = {
+    active: profile.active,
+    completed: profile.completed,
+    rejected: profile.failed
+  };
 
   return (
     <div className="space-y-10">
       {/* Detailed Signals Section */}
-      {reputation && (
-         <div className="space-y-6">
-           <div className="flex items-center justify-between border-b border-arc-line pb-4">
-             <div className="flex items-center gap-3">
-               <ShieldCheck className="w-5 h-5 text-arc-ink" />
-               <h2 className="text-xl font-medium tracking-tight">Reputation Matrix</h2>
-               <div className="flex items-center gap-6 ml-4">
-                 <div className="flex flex-col">
-                   <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Reputation Tier</span>
-                   <span className="text-sm font-medium text-arc-ink">{reputation.tier}</span>
-                 </div>
-                 <div className="flex flex-col border-l border-arc-line pl-6">
-                   <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Score</span>
-                   <span className="text-sm font-bold text-arc-ink">{"=>"} {reputation.coreIndex.toString()}</span>
-                 </div>
-               </div>
-               <button 
-                 onClick={handleManualRefresh}
-                 disabled={isRefreshing}
-                 className="p-1.5 rounded-lg hover:bg-arc-ink/5 transition-colors disabled:opacity-50 ml-2"
-                 title="Refresh Reputation"
-               >
-                 <RefreshCcw className={cn("w-4 h-4 text-arc-ink/40", isRefreshing && "animate-spin")} />
-               </button>
-             </div>
-             <Badge className="bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">Active Indexing</Badge>
-           </div>
-           
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-             <SignalBar 
-               label="Reliability" 
-               score={reputation.reliabilityScore} 
-               colorClass="bg-blue-500" 
-             />
-             <SignalBar 
-               label="Dispute Integrity" 
-               score={reputation.disputeIntegrityScore} 
-               colorClass="bg-purple-500" 
-             />
-             <SignalBar 
-               label="Earned Value" 
-               score={reputation.earnedValueScore} 
-               colorClass="bg-emerald-500" 
-             />
-             <SignalBar 
-               label="Activity Recency" 
-               score={reputation.activityScore} 
-               colorClass="bg-amber-500" 
-             />
-           </div>
+      <div className={cn("space-y-6 transition-opacity", !profile.rated && "opacity-60")}>
+        <div className="flex items-center justify-between border-b border-arc-line pb-4">
+          <div className="flex items-center gap-3">
+            <ShieldCheck className="w-5 h-5 text-arc-ink" />
+            <h2 className="text-xl font-medium tracking-tight">Reputation Matrix</h2>
+            <div className="flex items-center gap-6 ml-4">
+              <div className="flex flex-col">
+                <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Reputation Tier</span>
+                <span className={cn("text-sm font-medium", !profile.rated ? "text-arc-ink/40" : "text-arc-ink")}>
+                  {liveReputation.tier}
+                </span>
+              </div>
+              <div className="flex flex-col border-l border-arc-line pl-6">
+                <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Score</span>
+                <span className="text-sm font-bold text-arc-ink">
+                  {profile.rated ? `=> ${liveReputation.coreIndex}` : "--"}
+                </span>
+              </div>
+            </div>
+            <button 
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              className="p-1.5 rounded-lg hover:bg-arc-ink/5 transition-colors disabled:opacity-50 ml-2"
+              title="Refresh Reputation"
+            >
+              <RefreshCcw className={cn("w-4 h-4 text-arc-ink/40", isRefreshing && "animate-spin")} />
+            </button>
+          </div>
+          <Badge className="bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">Active Indexing</Badge>
+        </div>
 
-           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
-             <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-                <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Completed</div>
-                <div className="text-xl font-mono">{profile?.completedJobs.toString() || "0"}</div>
+        {!profile.rated && (
+          <div className="bg-amber-500/5 border border-amber-500/10 rounded-xl p-4 flex items-center gap-3">
+             <AlertTriangle className="w-4 h-4 text-amber-500" />
+             <div className="text-xs text-amber-700 font-medium">
+               Minimum 3 completed jobs required for reputation indexing. 
+               Current: {profile.totalJobs}/3
              </div>
-             <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-                <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Failed</div>
-                <div className="text-xl font-mono">{profile?.failedJobs.toString() || "0"}</div>
-             </div>
-             <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-                <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Total Earned</div>
-                <div className="text-xl font-mono">${profile ? Math.floor(Number(formatUnits(profile.totalEarnedUSDC, USDC_DECIMALS))).toLocaleString() : "0"}</div>
-             </div>
-             <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-                <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Won</div>
-                <div className="text-xl font-mono text-emerald-600">+{profile?.disputesWon.toString() || "0"}</div>
-             </div>
-           </div>
-         </div>
-      )}
+          </div>
+        )}
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+          <SignalBar 
+            label="Completion Rate" 
+            score={liveReputation.completionRate} 
+            colorClass="bg-blue-500" 
+          />
+          <SignalBar 
+            label="Dispute Performance" 
+            score={liveReputation.disputePerformance} 
+            colorClass="bg-purple-500" 
+          />
+          <SignalBar 
+            label="Earnings Stability" 
+            score={liveReputation.earningsStability} 
+            colorClass="bg-emerald-500" 
+          />
+          <SignalBar 
+            label="Reliability Index" 
+            score={liveReputation.coreIndex} 
+            colorClass="bg-amber-500" 
+          />
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Completed</div>
+             <div className="text-xl font-mono">{profile.completed}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Failed</div>
+             <div className="text-xl font-mono">{profile.failed}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Total Earned</div>
+             <div className="text-xl font-mono">${Math.floor(Number(formatUnits(profile.earned, USDC_DECIMALS))).toLocaleString()}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Won</div>
+             <div className="text-xl font-mono text-emerald-600">+{profile.disputesWon}</div>
+          </div>
+        </div>
+      </div>
 
       <div className="space-y-6">
         <div className="flex items-center justify-between">
@@ -1855,70 +2411,46 @@ function DeveloperProfile({ address, allJobs, onSelect, onRefresh, jobIdentities
         </div>
         
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 px-1">
-              <Clock className="w-4 h-4 text-arc-ink/40" />
-              <span className="text-[10px] uppercase font-bold tracking-widest text-arc-ink/40">My Active Jobs</span>
-            </div>
-            <div className="space-y-4">
-              {hasJobs ? allJobs.map(id => (
-                <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="active" onSelect={onSelect} jobIdentities={jobIdentities} />
-              )) : (
-                <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No active jobs found.</div>
-              )}
-            </div>
-          </div>
+          <CollapsibleJobGroup title="My Active Jobs" icon={Clock} defaultOpen={true} count={counts.active}>
+            {hasJobs ? allJobs.map(id => (
+              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="active" onSelect={onSelect} />
+            )) : (
+              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No active jobs found.</div>
+            )}
+          </CollapsibleJobGroup>
           
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 px-1">
-              <CircleCheck className="w-4 h-4 text-emerald-500" />
-              <span className="text-[10px] uppercase font-bold tracking-widest text-arc-ink/40">My Completed Jobs</span>
-            </div>
-            <div className="space-y-4">
-              {hasJobs ? allJobs.map(id => (
-                <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="completed" onSelect={onSelect} jobIdentities={jobIdentities} />
-              )) : (
-                <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No completed jobs found.</div>
-              )}
-            </div>
-          </div>
+          <CollapsibleJobGroup title="My Completed Jobs" icon={CircleCheck} count={counts.completed}>
+            {hasJobs ? allJobs.map(id => (
+              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="completed" onSelect={onSelect} />
+            )) : (
+              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No completed jobs found.</div>
+            )}
+          </CollapsibleJobGroup>
 
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 px-1">
-              <X className="w-4 h-4 text-red-500" />
-              <span className="text-[10px] uppercase font-bold tracking-widest text-arc-ink/40">Rejected Jobs</span>
-            </div>
-            <div className="space-y-4">
-              {hasJobs ? allJobs.map(id => (
-                <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="rejected" onSelect={onSelect} jobIdentities={jobIdentities} />
-              )) : (
-                <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No rejected jobs found.</div>
-              )}
-            </div>
-          </div>
+          <CollapsibleJobGroup title="Rejected Jobs" icon={X} count={counts.rejected}>
+            {hasJobs ? allJobs.map(id => (
+              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="rejected" onSelect={onSelect} />
+            )) : (
+              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No rejected jobs found.</div>
+            )}
+          </CollapsibleJobGroup>
         </div>
       </div>
     </div>
   );
 }
 
-function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect, jobIdentities }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, mode: 'active' | 'completed' | 'rejected', onSelect: (id: bigint) => void, jobIdentities: any }) {
-  const { data: job } = useReadContract({
-    address: JOB_ESCROW_ADDRESS,
-    abi: JOB_ESCROW_ABI,
-    functionName: 'jobs',
-    args: [jobId],
-  });
+function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, mode: 'active' | 'completed' | 'rejected', onSelect: (id: bigint) => void }) {
+  const { jobsData } = useAppContext();
+  const job = jobsData[jobId.toString()];
 
   if (!job) return null;
-  const jobArray = Array.isArray(job) ? job : null;
-  const employer = jobArray ? jobArray[0] : (job as any).employer;
-  const developer = jobArray ? jobArray[1] : (job as any).developer;
-  const status = jobArray ? jobArray[5] : (job as any).status;
+  const developer = job[1];
+  const status = job[5];
 
-  if (!employer || employer === zeroAddress) return null;
+  if (!developer || developer === zeroAddress) return null;
   
-  const isMine = developer?.toLowerCase() === viewerAddress?.toLowerCase();
+  const isMine = developer.toLowerCase() === viewerAddress?.toLowerCase();
   const s = Number(status);
   const isActive = s === 2 || s === 3 || s === 5; // Assigned, WorkSubmitted, Disputed
   const isCompleted = s === 4;
@@ -1931,7 +2463,27 @@ function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect, jobIdentities 
   return <JobCard jobId={jobId} viewerAddress={viewerAddress} compact onSelect={onSelect} role="developer" />;
 }
 
-function JobExplorer({ address, role, allJobs, onSelect, jobIdentities }: { address: `0x${string}`, role: 'developer' | 'employer', allJobs: bigint[], onSelect: (id: bigint) => void, jobIdentities: any }) {
+function JobExplorer({ address, role, onSelect }: { address: `0x${string}`, role: 'developer' | 'employer', onSelect: (id: bigint) => void }) {
+  const { allJobs, jobIdentities, jobsData } = useAppContext();
+  
+  const counts = useMemo(() => {
+    const c = { active: 0, completed: 0, rejected: 0 };
+    allJobs.forEach(id => {
+       const identity = jobIdentities[id.toString()];
+       const isMine = identity?.developer?.toLowerCase() === address?.toLowerCase();
+       if (isMine) {
+          const job = jobsData[id.toString()];
+          if (job) {
+             const s = Number(job[5]);
+             if (s === 2 || s === 3 || s === 5) c.active++;
+             else if (s === 4) c.completed++;
+             else if (s === 7) c.rejected++;
+          }
+       }
+    });
+    return c;
+  }, [allJobs, jobIdentities, jobsData, address]);
+
   if (role === 'employer') {
     return (
       <div className="space-y-10">
@@ -1944,74 +2496,138 @@ function JobExplorer({ address, role, allJobs, onSelect, jobIdentities }: { addr
 
         <div className="space-y-12">
           <EmployerJobSection 
-            title="Active Job" 
-            allJobs={allJobs} 
+            title="My Active Jobs" 
             address={address} 
-            statuses={[0, 1, 2, 3, 7]} 
+            statuses={[0, 1, 2, 3]} 
             onSelect={onSelect} 
-            jobIdentities={jobIdentities}
           />
           <EmployerJobSection 
-            title="Cancelled Job" 
-            allJobs={allJobs} 
-            address={address} 
-            statuses={[6]} 
-            onSelect={onSelect} 
-            jobIdentities={jobIdentities}
-          />
-          <EmployerJobSection 
-            title="Completed Job" 
-            allJobs={allJobs} 
+            title="My Completed Jobs" 
             address={address} 
             statuses={[4]} 
             onSelect={onSelect} 
-            jobIdentities={jobIdentities}
+          />
+          <EmployerJobSection 
+            title="Rejected Jobs" 
+            address={address} 
+            statuses={[7]} 
+            onSelect={onSelect} 
+          />
+          <EmployerJobSection 
+            title="Cancelled Jobs" 
+            address={address} 
+            statuses={[6]} 
+            onSelect={onSelect} 
           />
           <EmployerJobSection 
             title="In Dispute" 
-            allJobs={allJobs} 
             address={address} 
             statuses={[5]} 
             onSelect={onSelect} 
-            jobIdentities={jobIdentities}
           />
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <h2 className="text-xl font-medium tracking-tight">Available Opportunities</h2>
-          <Badge className="bg-arc-ink/5 text-arc-ink/40">Public Discovery</Badge>
-        </div>
-      </div>
+  const hasJobs = allJobs.length > 0;
 
-      <div className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {allJobs.map(id => (
-            <JobDiscoveryFilter key={id.toString()} jobId={id} viewerAddress={address} role="developer" onSelect={onSelect} jobIdentities={jobIdentities} />
-          ))}
+  return (
+    <div className="space-y-10">
+      <div className="flex items-center justify-between">
+         <h2 className="text-xl font-medium tracking-tight">Contract Work Explorer</h2>
+         <Badge className="bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">Live Opportunities</Badge>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div className="space-y-6">
+          <CollapsibleJobGroup title="My Active Jobs" icon={Zap} count={counts.active}>
+            {hasJobs ? allJobs.map(id => (
+              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="active" onSelect={onSelect} />
+            )) : (
+              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No active jobs found.</div>
+            )}
+          </CollapsibleJobGroup>
+
+          <CollapsibleJobGroup title="My Completed Jobs" icon={CircleCheck} count={counts.completed}>
+            {hasJobs ? allJobs.map(id => (
+              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="completed" onSelect={onSelect} />
+            )) : (
+              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No completed jobs found.</div>
+            )}
+          </CollapsibleJobGroup>
+
+          <CollapsibleJobGroup title="Rejected Jobs" icon={X} count={counts.rejected}>
+            {hasJobs ? allJobs.map(id => (
+              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="rejected" onSelect={onSelect} />
+            )) : (
+              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No rejected jobs found.</div>
+            )}
+          </CollapsibleJobGroup>
+        </div>
+
+        <div className="space-y-6">
+          <div className="text-xs font-bold uppercase tracking-widest text-arc-ink/40 mb-2">Available Opportunities</div>
+          {allJobs.length > 0 ? (
+            <div className="space-y-4">
+              {allJobs.map(id => {
+                const identity = jobIdentities[id.toString()];
+                const job = jobsData[id.toString()];
+                if (!job) return null;
+                const status = Number(job[5]);
+                // Only show funded and not assigned jobs as "opportunities"
+                if (status === 1 && identity?.developer === zeroAddress) {
+                  return <JobCard key={id.toString()} jobId={id} viewerAddress={address} compact onSelect={onSelect} />;
+                }
+                return null;
+              })}
+            </div>
+          ) : (
+            <div className="p-12 border border-dashed border-arc-line rounded-3xl flex flex-col items-center justify-center text-center space-y-4 bg-arc-ink/[0.02]">
+              <div className="p-4 bg-arc-ink/5 rounded-full">
+                <Briefcase className="w-8 h-8 text-arc-ink/20" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-bold text-arc-ink/60">No Opportunities Available</p>
+                <p className="text-[11px] text-arc-ink/30">New escrow contracts will appear here once funded.</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function EmployerJobSection({ title, allJobs, address, statuses, onSelect, jobIdentities }: { title: string, allJobs: bigint[], address: `0x${string}`, statuses: number[], onSelect: (id: bigint) => void, jobIdentities: any }) {
-  // We need to count matching jobs to show/hide empty sections or just show empty state
+function EmployerJobSection({ title, address, statuses, onSelect }: { title: string, address: `0x${string}`, statuses: number[], onSelect: (id: bigint) => void }) {
+  const { allJobs, jobIdentities, jobsData } = useAppContext();
+  
+  const relevantJobs = useMemo(() => {
+    return allJobs.filter(id => {
+      const identity = jobIdentities[id.toString()];
+      const isMine = identity?.employer?.toLowerCase() === address?.toLowerCase();
+      if (!isMine) return false;
+      const job = jobsData[id.toString()];
+      if (!job) return false;
+      const status = Number(job[5]);
+      return statuses.includes(status);
+    });
+  }, [allJobs, jobIdentities, jobsData, address, statuses]);
+
+  if (relevantJobs.length === 0) return null;
+
   return (
     <div className="space-y-6">
-      <h3 className="text-sm font-bold text-arc-ink/40 uppercase tracking-[0.2em] flex items-center gap-3">
-        <div className="h-[1px] flex-1 bg-arc-line" />
-        {title}
-        <div className="h-[1px] flex-1 bg-arc-line" />
-      </h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {allJobs.map(id => (
-          <JobStatusFilter key={id.toString()} jobId={id} viewerAddress={address} targetStatuses={statuses} onSelect={onSelect} jobIdentities={jobIdentities} />
+      <div className="flex items-center gap-3">
+        <div className="w-1.5 h-6 bg-arc-ink rounded-full" />
+        <h3 className="text-lg font-medium tracking-tight flex items-center gap-2">
+          {title}
+          <Badge className="bg-arc-ink/5 text-arc-ink/40">{relevantJobs.length}</Badge>
+        </h3>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {relevantJobs.map(id => (
+           <JobCard key={id.toString()} jobId={id} viewerAddress={address} compact onSelect={onSelect} role="employer" />
         ))}
       </div>
     </div>
@@ -2192,18 +2808,18 @@ function DisputeTimer({ jobId, onExpire }: { jobId: any, onExpire?: () => void }
 }
 
 function CountdownTimer({ jobId, durationDays, compact }: { jobId: bigint, durationDays: number, compact?: boolean }) {
-  const publicClient = usePublicClient();
+  const timerPublicClient = usePublicClient();
   const [assignedAt, setAssignedAt] = useState<number | null>(null);
   const [timeLeft, setTimeLeft] = useState<{ d: number, h: number, m: number, s: number } | null>(null);
 
   useEffect(() => {
     async function getAssignmentTime() {
-      if (!publicClient) return;
+      if (!timerPublicClient) return;
       try {
-        const toBlock = await publicClient.getBlockNumber();
+        const toBlock = await timerPublicClient.getBlockNumber();
         const fromBlock = toBlock > BigInt(5000) ? toBlock - BigInt(5000) : BigInt(0);
         
-        const logs = await publicClient.getLogs({
+        const logs = await timerPublicClient.getLogs({
           address: JOB_ESCROW_ADDRESS,
           event: {
             type: 'event',
@@ -2219,7 +2835,7 @@ function CountdownTimer({ jobId, durationDays, compact }: { jobId: bigint, durat
         });
 
         if (logs.length > 0) {
-          const block = await publicClient.getBlock({ blockHash: logs[0].blockHash! });
+          const block = await timerPublicClient.getBlock({ blockHash: logs[0].blockHash! });
           setAssignedAt(Number(block.timestamp));
         }
       } catch (e) {
@@ -2227,7 +2843,7 @@ function CountdownTimer({ jobId, durationDays, compact }: { jobId: bigint, durat
       }
     }
     getAssignmentTime();
-  }, [jobId, publicClient]);
+  }, [jobId, timerPublicClient]);
 
   useEffect(() => {
     if (!assignedAt) return;
@@ -2271,13 +2887,15 @@ function CountdownTimer({ jobId, durationDays, compact }: { jobId: bigint, durat
   );
 }
 
-function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: bigint, viewerAddress: `0x${string}`, compact?: boolean, onSelect?: (id: bigint) => void, role?: 'developer' | 'employer' }) {
-  const { data: job, refetch } = useReadContract({
-    address: JOB_ESCROW_ADDRESS,
-    abi: JOB_ESCROW_ABI,
-    functionName: 'jobs',
-    args: [jobId],
-  });
+function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, compact?: boolean, onSelect?: (id: bigint) => void, role?: 'developer' | 'employer' }) {
+  const { interactionState, setInteractionState, alert, jobsData, refetchJobs, resolutionHistory } = useAppContext();
+  const job = jobsData[jobId.toString()];
+  
+  const queryClient = useQueryClient();
+  const refetch = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['job', jobId.toString()] });
+    refetchJobs();
+  }, [jobId, refetchJobs, queryClient]);
 
   const { data: activeJobsCount } = useReadContract({
     address: JOB_ESCROW_ADDRESS,
@@ -2313,9 +2931,13 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
       console.error("[Escrow Debug] Write Error:", writeError);
       const msg = writeError.message.toLowerCase();
       if (msg.includes("user rejected")) return;
-      alert(`Transaction failed: ${writeError.message.slice(0, 100)}${writeError.message.length > 100 ? '...' : ''}`);
+      alert({ 
+        title: "Transaction Error", 
+        message: writeError.message.slice(0, 100) + (writeError.message.length > 100 ? '...' : ''),
+        type: "error"
+      });
     }
-  }, [writeError]);
+  }, [writeError, alert]);
 
   useEffect(() => {
     if (isSuccess) {
@@ -2326,13 +2948,36 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
   if (!job || job[0] === zeroAddress) return compact ? null : <Card>Job not found</Card>;
 
   const [employer, developer, amount, upfrontAmount, metadataURL, status, upfrontPaid, upfrontPercent] = job as any;
+  const isEmployer = viewerAddress?.toLowerCase() === employer?.toLowerCase();
+  const isDeveloper = viewerAddress?.toLowerCase() === developer?.toLowerCase();
 
   // Requirement: Employer should never have access to the same job that he posted when he switch to his developer section
-  if (role === 'developer' && employer?.toLowerCase() === viewerAddress?.toLowerCase()) {
+  if (role === 'developer' && isEmployer) {
     return null;
   }
 
-  const statusLabels = ["Created", "Funded", "Assigned", "WorkSubmitted", "Completed", "Disputed", "Cancelled", "Rejected"];
+  const rawStatusLabels = ["REQUESTED", "FUNDED", "ACCEPTED", "SUBMITTED", "COMPLETED", "DISPUTED", "CANCELLED", "REJECTED"];
+  const res = resolutionHistory[jobId.toString()];
+  
+  let displayStatus = rawStatusLabels[Number(status)];
+  
+  // Deterministic outcome mapping for disputes
+  if (res) {
+    const isWinner = res.winner === (role === 'developer' ? 'dev' : 'emp');
+    displayStatus = isWinner ? "DISPUTE_WON" : "DISPUTE_LOST";
+  } else if (Number(status) === 4) {
+    displayStatus = "COMPLETED";
+  } else if (Number(status) === 5) {
+    displayStatus = "DISPUTED";
+  } else if (Number(status) === 1 || Number(status) === 0) {
+    displayStatus = "REQUESTED";
+  } else if (Number(status) === 2 || Number(status) === 3) {
+    displayStatus = "ACCEPTED";
+  } else if (Number(status) === 7) {
+    displayStatus = "REJECTED";
+  } else if (Number(status) === 8) { // RESOLVING is sometimes used internally, map to DISPUTED
+    displayStatus = "DISPUTED";
+  }
   
   let parsedMetadata = { title: "Unnamed Job", description: "No description provided.", requirements: "None", duration: 0 };
   try {
@@ -2347,7 +2992,6 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
   const hasResubmitted = Number(resubCount || 0) >= 1;
 
   const handleApprove = () => {
-    console.log(`[Escrow Debug] Requesting USDC approval for ${formatUnits(amount as bigint, USDC_DECIMALS)} tokens to ${JOB_ESCROW_ADDRESS}`);
     writeContract({
       address: USDC_ADDRESS,
       abi: USDC_ABI,
@@ -2378,11 +3022,19 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
 
   const handleAccept = () => {
     if (isEmployer) {
-      alert("As the employer, you cannot accept your own job. Please connect a different wallet to act as a developer.");
+      alert({
+        title: "Validation Error",
+        message: "As the employer, you cannot accept your own job. Please connect a different wallet to act as a developer.",
+        type: "error"
+      });
       return;
     }
     if (activeJobsCount && (activeJobsCount as bigint) >= BigInt(100)) {
-      alert("Job limit reached (100 active jobs max)");
+      alert({
+        title: "Validation Error",
+        message: "Job limit reached (100 active jobs max)",
+        type: "error"
+      });
       return;
     }
     writeContract({
@@ -2395,7 +3047,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
 
   const handleSubmit = () => {
     if (!submissionData.description) {
-      alert("Please provide a description of the work performed.");
+      alert({ title: "Submission Error", message: "Please provide a description of the work performed.", type: "error" });
       return;
     }
     
@@ -2404,15 +3056,19 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
       setShowResubmitConfirm(false);
     }
     
-    // Security: Only send metadata to chain, binary remains in local vault for handover
+    if (submissionData.fileData) {
+      setInteractionState(prev => ({
+        ...prev,
+        assets: { ...prev.assets, [jobId.toString()]: submissionData.fileData }
+      }));
+    }
+
     const { fileData, ...metadata } = submissionData;
     const submissionBody = JSON.stringify({
       ...metadata,
       submittedAt: Date.now()
     });
 
-    console.log(`[Escrow Debug] Submitting work for Job #${jobId.toString()} with status ${status}`);
-    
     writeContract({
       address: JOB_ESCROW_ADDRESS,
       abi: JOB_ESCROW_ABI,
@@ -2435,7 +3091,6 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
       setShowRejectInput(true);
       return;
     }
-    console.log(`[Escrow Debug] Rejecting Job #${jobId.toString()} with reason: ${rejectionReason}`);
     writeContract({
       address: JOB_ESCROW_ADDRESS,
       abi: JOB_ESCROW_ABI,
@@ -2447,11 +3102,6 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
   };
 
   const handleFund = () => {
-    console.log(`[Escrow Debug] Attempting to fund Job #${jobId.toString()}`);
-    console.log(`[Escrow Debug] Employer: ${viewerAddress}`);
-    console.log(`[Escrow Debug] Current Allowance: ${allowance ? formatUnits(allowance as bigint, USDC_DECIMALS) : "Unknown"} USDC`);
-    console.log(`[Escrow Debug] Required Amount: ${formatUnits(amount as bigint, USDC_DECIMALS)} USDC`);
-    
     writeContract({
       address: JOB_ESCROW_ADDRESS,
       abi: JOB_ESCROW_ABI,
@@ -2470,63 +3120,43 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
   };
 
   const handleExpireRejection = () => {
-    // Only call if status is still rejected
-    if (Number(status) === 7) {
-      writeContract({
-        address: JOB_ESCROW_ADDRESS,
-        abi: JOB_ESCROW_ABI,
-        functionName: 'syncState',
-        args: [BigInt(jobId.toString())],
-      } as any);
-    }
+    writeContract({
+      address: JOB_ESCROW_ADDRESS,
+      abi: JOB_ESCROW_ABI,
+      functionName: 'cancelJob',
+      args: [BigInt(jobId.toString())],
+    } as any);
   };
 
   const handleExpireDispute = () => {
-    if (Number(status) === 5) {
-      writeContract({
-        address: JOB_ESCROW_ADDRESS,
-        abi: JOB_ESCROW_ABI,
-        functionName: 'syncState',
-        args: [BigInt(jobId.toString())],
-      } as any);
-    }
+    writeContract({
+      address: JOB_ESCROW_ADDRESS,
+      abi: JOB_ESCROW_ABI,
+      functionName: 'resolveDispute',
+      args: [BigInt(jobId.toString()), true], // Favor developer by default on timeout
+    } as any);
   };
 
-  const { data: devRegistryProfile } = useReadContract({
-    address: REPUTATION_REGISTRY_ADDRESS,
-    abi: REPUTATION_REGISTRY_ABI,
-    functionName: 'getFullProfile',
-    args: developer && developer !== zeroAddress ? [developer] : undefined,
-    query: { enabled: !!developer && developer !== zeroAddress }
-  });
-
-  const { data: empRegistryProfile } = useReadContract({
-    address: REPUTATION_REGISTRY_ADDRESS,
-    abi: REPUTATION_REGISTRY_ABI,
-    functionName: 'getEmployerFullProfile',
-    args: employer && employer !== zeroAddress ? [employer] : undefined,
-    query: { enabled: !!employer && employer !== zeroAddress }
-  });
-
-  const isEmployer = employer === viewerAddress;
-  const isDeveloper = developer === viewerAddress;
-
-  // Track submission info from events
-  const [submissionInfo, setSubmissionInfo] = useState<any>(null);
-  const [accessRequested, setAccessRequested] = useState(false);
-  const [keysSubmitted, setKeysSubmitted] = useState<any>(null);
-  const publicClient = usePublicClient();
+  const { allDerivedStats } = useAppContext();
   
-  // Also fetch historical events for this job
+  const empRep = allDerivedStats[(employer as string).toLowerCase()] || {
+    employer: { score: 0, tier: 'Rookie' }
+  };
+  
+  const devRep = developer && developer !== zeroAddress ? (allDerivedStats[developer.toLowerCase()] || {
+    developer: { score: 0, tier: 'Rookie' }
+  }) : null;
+
+  const cardPublicClient = usePublicClient();
+  
   useEffect(() => {
     async function getPastEvents() {
-      if (!publicClient || !jobId) return;
+      if (!cardPublicClient || !jobId) return;
       try {
-        const toBlock = await publicClient.getBlockNumber();
-        const fromBlock = toBlock > BigInt(10000) ? toBlock - BigInt(10000) : BigInt(0);
+        const toBlock = await cardPublicClient.getBlockNumber();
+        const startBlock = toBlock > BigInt(10000) ? toBlock - BigInt(10000) : BigInt(0);
         
-        // 1. Fetch WorkSubmitted
-        const submissionLogs = await publicClient.getLogs({
+        const submissionLogs = await cardPublicClient.getLogs({
           address: JOB_ESCROW_ADDRESS,
           event: {
             type: 'event',
@@ -2537,7 +3167,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
             ]
           },
           args: { jobId },
-          fromBlock,
+          fromBlock: startBlock,
           toBlock
         });
 
@@ -2545,16 +3175,11 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
           const log = submissionLogs[submissionLogs.length - 1] as any;
           const rawHash = log.args.proofHash;
           if (rawHash && rawHash.trim().startsWith('{')) {
-            try {
-              setSubmissionInfo(JSON.parse(rawHash));
-            } catch (e) {
-              console.error("Failed to parse historical submission", e);
-            }
+            setSubmissionInfo(JSON.parse(rawHash));
           }
         }
 
-        // 2. Fetch WorkRejected
-        const rejectionLogs = await publicClient.getLogs({
+        const rejectionLogs = await cardPublicClient.getLogs({
           address: JOB_ESCROW_ADDRESS,
           event: {
             type: 'event',
@@ -2566,7 +3191,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
             ]
           },
           args: { jobId },
-          fromBlock,
+          fromBlock: startBlock,
           toBlock
         });
 
@@ -2581,76 +3206,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
     if (Number(status) >= 3) {
       getPastEvents();
     }
-  }, [jobId, status, publicClient]);
-
-  // Handle Access Requests & Key Submissions (Simulation via LocalStorage)
-  useEffect(() => {
-    const handleStorage = () => {
-      const accessKey = `arc_access_req_${jobId.toString()}`;
-      const keysKey = `arc_keys_sub_${jobId.toString()}`;
-      setAccessRequested(localStorage.getItem(accessKey) === 'true');
-      const savedKeys = localStorage.getItem(keysKey);
-      if (savedKeys) setKeysSubmitted(JSON.parse(savedKeys));
-    };
-
-    handleStorage();
-    window.addEventListener('storage', handleStorage);
-    const interval = setInterval(handleStorage, 2000); // Polling as fallback for same-window storage events
-
-    return () => {
-      window.removeEventListener('storage', handleStorage);
-      clearInterval(interval);
-    };
-  }, [jobId]);
-
-  const handleDemandAccess = () => {
-    const accessKey = `arc_access_req_${jobId.toString()}`;
-    localStorage.setItem(accessKey, 'true');
-    setAccessRequested(true);
-    // Custom trigger for same window
-    window.dispatchEvent(new Event('storage'));
-  };
-
-  const [keySubmission, setKeySubmission] = useState({ backendKeys: '', repoAccess: '' });
-  
-  const downloadFile = (fileName: string) => {
-    // Attempt to retrieve original file data from local vault (simulation of secure handover)
-    const storedData = localStorage.getItem(`arc_asset_${jobId.toString()}`);
-    
-    if (storedData && (storedData.startsWith('data:') || storedData.length > 100)) {
-      const link = document.createElement('a');
-      link.href = storedData;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      console.log(`[Escrow] Downloaded ${fileName} from local vault.`);
-      return;
-    }
-
-    // Detailed error file if original is missing
-    const content = `ARC SECURE PROTOCOL - DECRYPTION ERROR\n\nJob ID: ${jobId}\nFile Name: ${fileName}\n\nREASON: Original binary fragments not found in local handover vault. This can happen if the browser cache was cleared or the session is different.\n\nWORK DESCRIPTION:\n${submissionInfo?.description || 'N/A'}`;
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.style.display = 'none';
-    a.href = url;
-    a.download = `MISSING_${fileName}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
-  };
-
-  const handleSubmitKeys = () => {
-    const keysKey = `arc_keys_sub_${jobId.toString()}`;
-    const payload = { ...keySubmission, submittedAt: Date.now() };
-    localStorage.setItem(keysKey, JSON.stringify(payload));
-    setKeysSubmitted(payload);
-    window.dispatchEvent(new Event('storage'));
-  };
-
-  const [rejectionReasonText, setRejectionReasonText] = useState<string | null>(null);
+  }, [jobId, status, cardPublicClient]);
 
   useWatchContractEvent({
     address: JOB_ESCROW_ADDRESS,
@@ -2660,6 +3216,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
       const relevantLog = logs.find((log: any) => BigInt(log.args.jobId) === BigInt(jobId));
       if (relevantLog) {
         setRejectionReasonText((relevantLog.args as any).reason);
+        refetch();
       }
     },
   });
@@ -2679,9 +3236,61 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
         } catch (e) {
           console.warn("Failed to parse submission event data", e);
         }
+        refetch();
       }
     },
   });
+
+  const accessRequested = interactionState.accessRequests[jobId.toString()] || false;
+  const keysSubmitted = interactionState.keysSubmitted[jobId.toString()];
+
+  const handleDemandAccess = () => {
+    setInteractionState(prev => ({
+      ...prev,
+      accessRequests: { ...prev.accessRequests, [jobId.toString()]: true }
+    }));
+  };
+
+  const [keySubmission, setKeySubmission] = useState({ backendKeys: '', repoAccess: '' });
+  
+  const downloadFile = (fileName: string) => {
+    const storedData = interactionState.assets[jobId.toString()];
+    
+    if (storedData) {
+      const link = document.createElement('a');
+      link.href = storedData;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
+    const content = `ARC SECURE PROTOCOL - DECRYPTION ERROR\n\nJob ID: ${jobId}\nFile Name: ${fileName}\n\nREASON: Original binary fragments not found in local handover vault.\n\nWORK DESCRIPTION:\n${submissionInfo?.description || 'N/A'}`;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = `MISSING_${fileName}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
+  const handleSubmitKeys = () => {
+    setInteractionState(prev => ({
+      ...prev,
+      keysSubmitted: { 
+        ...prev.keysSubmitted, 
+        [jobId.toString()]: { ...keySubmission, submittedAt: Date.now() } 
+      }
+    }));
+  };
+
+  const [rejectionReasonText, setRejectionReasonText] = useState<string | null>(null);
+  const [submissionInfo, setSubmissionInfo] = useState<any>(null);
 
   if (compact) {
     return (
@@ -2705,9 +3314,11 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
              </div>
              <Badge className={cn(
                "shrink-0 border whitespace-nowrap",
-               Number(status) === 3 ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-arc-ink/5 text-arc-ink/40 border-arc-line"
+               Number(status) === 3 || displayStatus === "DISPUTE_WON" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : 
+               displayStatus === "DISPUTE_LOST" ? "bg-red-500/10 text-red-600 border-red-500/20" :
+               "bg-arc-ink/5 text-arc-ink/40 border-arc-line"
              )}>
-               {statusLabels[status]}
+               {displayStatus}
              </Badge>
           </div>
         </div>
@@ -2722,7 +3333,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
            <div className="flex items-center gap-1.5 overflow-hidden">
              <div className="text-[10px] text-arc-ink/40 font-mono shrink-0">By {(employer as string).slice(0, 6)}</div>
              <Badge className="bg-arc-ink/5 text-arc-ink/40 border-none px-1.5 py-0 scale-90 origin-left">
-               {(empRegistryProfile as any)?.[2]} ({(empRegistryProfile as any)?.[1]?.toString()})
+               {empRep.employer.tier} ({empRep.employer.score})
              </Badge>
            </div>
            <div className="text-sm font-mono font-bold text-arc-ink/80 shrink-0">{Math.floor(Number(formatUnits(amount as bigint, USDC_DECIMALS))).toLocaleString()} USDC</div>
@@ -2751,8 +3362,11 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
             </div>
             <h3 className="text-xl font-semibold tracking-tight">{parsedMetadata.title}</h3>
             <div className="text-[10px] uppercase font-bold text-emerald-600 tracking-widest flex items-center gap-1">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              {statusLabels[status as number]}
+              <div className={cn(
+                "w-1.5 h-1.5 rounded-full animate-pulse",
+                displayStatus.includes("LOST") ? "bg-red-500" : "bg-emerald-500"
+              )} />
+              {displayStatus}
             </div>
           </div>
         </div>
@@ -2786,7 +3400,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
             <div className="text-xs font-mono flex items-center gap-2">
               <span>{(employer as string).slice(0, 8)}...{(employer as string).slice(-6)}</span>
               <Badge className="bg-arc-ink text-white">
-                {(empRegistryProfile as any)?.[2]} ({(empRegistryProfile as any)?.[1]?.toString()})
+                {empRep.employer.tier} ({empRep.employer.score})
               </Badge>
             </div>
           </div>
@@ -2797,7 +3411,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
                 <div className="flex items-center gap-2">
                   <span>{(developer as string).slice(0, 8)}...{(developer as string).slice(-6)}</span>
                   <Badge className="bg-arc-ink text-white">
-                    {(devRegistryProfile as any)?.[1]?.tier} ({(devRegistryProfile as any)?.[1]?.coreIndex?.toString()})
+                    {devRep?.developer.tier} ({devRep?.developer.score})
                   </Badge>
                 </div>
               )}
@@ -3281,7 +3895,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { jobId: big
       <div className="flex items-center gap-4 pt-4 border-t border-arc-line text-[10px] font-mono text-arc-ink/40">
         <div className="flex items-center gap-1 italic">
           <Clock className="w-3 h-3" />
-          Status: {statusLabels[status]}
+          Status: {displayStatus}
         </div>
         <div className="h-4 w-px bg-arc-line" />
         <div>Upfront Paid: {upfrontPaid ? "YES" : "NO"}</div>

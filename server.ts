@@ -289,77 +289,13 @@ async function startServer() {
                jobEmployerMap[jobIdStr] = employer;
                jobDeveloperMap[jobIdStr] = developer;
                jobAmountMap[jobIdStr] = amount;
-               
-               // We don't update reputation on Created, only on Funded (as per directive 1 in previous turn, and symmetry now)
-               // However, JobCreated sets the identity.
             } else if (parsedLog.name === "PaymentReleased") {
                const [, , amount] = parsedLog.args;
-               const employer = jobEmployerMap[jobIdStr];
-               const developer = jobDeveloperMap[jobIdStr];
-
-               if (employer && developer && !jobScoredMap[jobIdStr]) {
-                 jobScoredMap[jobIdStr] = true;
-                 queueTx(
-                   () => registryContract.updateStats(jobId, developer, 1, 0, amount, amount, false, false),
-                   `PaymentReleased: Update dev stats for job ${jobIdStr}`
-                 );
-                 queueTx(
-                   () => registryContract.updateEmployerStats(jobId, employer, 1, 0),
-                   `PaymentReleased: Update employer stats for job ${jobIdStr}`
-                 );
-               }
-            } else if (parsedLog.name === "DisputeResolved") {
-               const [, favorDeveloper] = parsedLog.args;
-               const employer = jobEmployerMap[jobIdStr];
-               const developer = jobDeveloperMap[jobIdStr];
-               const amount = jobAmountMap[jobIdStr] || BigInt(0);
-
-               if (employer && developer && !jobScoredMap[jobIdStr]) {
-                 jobScoredMap[jobIdStr] = true;
-                 queueTx(
-                   () => registryContract.updateStats(
-                     jobId, developer, 
-                     favorDeveloper ? 1 : 0, favorDeveloper ? 0 : 1, 
-                     favorDeveloper ? 0 : amount, amount,
-                     favorDeveloper, !favorDeveloper
-                   ),
-                   `DisputeResolved: Update dev stats for job ${jobIdStr} (FavorDev: ${favorDeveloper})`
-                 );
-                 queueTx(
-                   () => registryContract.updateEmployerStats(
-                        jobId, employer, favorDeveloper ? 2 : 3, 0
-                   ),
-                   `DisputeResolved: Update employer stats for job ${jobIdStr} (FavorDev: ${favorDeveloper})`
-                 );
-               }
-            } else if (parsedLog.name === "WorkRejected") {
-               const developer = jobDeveloperMap[jobIdStr];
-               if (developer) {
-                 queueTx(
-                   () => registryContract.recordRejection(jobId, developer),
-                   `WorkRejected: Record rejection for developer ${developer} (Job ${jobIdStr})`
-                 );
-               }
+               jobAmountMap[jobIdStr] = (jobAmountMap[jobIdStr] || 0n) + amount; // track total if needed
             } else if (parsedLog.name === "JobFunded") {
-               const employer = jobEmployerMap[jobIdStr];
-               const amount = jobAmountMap[jobIdStr] || BigInt(0);
                jobFundedMap[jobIdStr] = true;
-               if (employer) {
-                 queueTx(
-                   () => registryContract.updateEmployerStats(jobId, employer, 0, amount),
-                   `JobFunded: Update employer stats for job ${jobIdStr}`
-                 );
-               }
             } else if (parsedLog.name === "JobClosed") {
-               const employer = jobEmployerMap[jobIdStr];
-               const wasFunded = jobFundedMap[jobIdStr];
-               if (employer && wasFunded && !jobScoredMap[jobIdStr]) {
-                  jobScoredMap[jobIdStr] = true;
-                  queueTx(
-                    () => registryContract.updateEmployerStats(jobId, employer, 4, 0),
-                    `JobClosed: Apply cancellation penalty for employer ${employer} (Job ${jobIdStr})`
-                  );
-               }
+               jobScoredMap[jobIdStr] = true;
             }
           } catch (logErr: any) {
             console.error(`[Indexer] Log error at block ${log.blockNumber}:`, logErr.message);
