@@ -30,7 +30,8 @@ import {
   CheckCircle2,
   FileArchive,
   Key,
-  AlertTriangle
+  AlertTriangle,
+  Trophy
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -156,7 +157,7 @@ function GitHubHoverPreview({ username }: { username: string }) {
   );
 }
 
-const Badge = ({ children, className }: { children: React.ReactNode, className?: string }) => (
+const Badge = ({ children, className }: { children: React.ReactNode, className?: string, key?: any }) => (
   <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-medium tracking-tight uppercase", className)}>
     {children}
   </span>
@@ -718,6 +719,7 @@ export default function App() {
 
   const [resolutionHistory, setResolutionHistory] = useState<Record<string, { winner: 'dev' | 'emp' }>>({});
   const [isReinitializing, setIsReinitializing] = useState(false);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
   const prevAddress = useRef(address);
 
   useEffect(() => {
@@ -1102,8 +1104,8 @@ export default function App() {
         
         {/* Connection Check */}
         {!isConnected ? (
-          <div className="h-[70vh] flex flex-col items-center justify-center text-center space-y-8">
-            <div className="w-24 h-24 bg-arc-ink/[0.03] rounded-full flex items-center justify-center border border-arc-line">
+          <div className={cn("flex flex-col items-center justify-center text-center space-y-8 py-12 md:py-20", showHowItWorks ? "min-h-screen" : "h-[70vh]")}>
+            <div className="w-24 h-24 bg-arc-ink/[0.03] rounded-full flex items-center justify-center border border-arc-line shadow-inner">
               <ShieldCheck className="w-12 h-12 opacity-20" />
             </div>
             <div className="space-y-4">
@@ -1112,9 +1114,186 @@ export default function App() {
                 Escrow work, verify execution, and settle USDC through programmable onchain state transitions with sub second deterministic finality on Arc
               </p>
             </div>
-            <Button onClick={() => connect({ connector: connectors[0] })} className="px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg">
-              Launch Dashboard
-            </Button>
+            <div className="flex flex-col md:flex-row items-center gap-4">
+              <Button onClick={() => connect({ connector: connectors[0] })} className="px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg">
+                Launch Dashboard
+              </Button>
+              <Button 
+                variant="secondary" 
+                onClick={() => setShowHowItWorks(!showHowItWorks)}
+                className="px-12 py-4 rounded-2xl border-arc-line bg-transparent text-arc-ink/60 hover:bg-arc-ink/5 hover:text-arc-ink text-lg"
+              >
+                How ArcProof Works
+              </Button>
+            </div>
+
+            {/* How ArcProof Works Walkthrough */}
+            {showHowItWorks && (
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="pt-24 max-w-5xl mx-auto w-full space-y-16 pb-20 border-t border-arc-line mt-12"
+              >
+                <div className="text-center space-y-4">
+                  <h2 className="text-3xl font-bold tracking-tight">How ArcProof Works</h2>
+                  <p className="text-arc-ink/50 max-w-2xl mx-auto">
+                    Deterministic escrow settlement and reputation infrastructure powered by on-chain lifecycle events.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* STEP 01 */}
+                  <div className="glass p-8 rounded-[2rem] border border-arc-line space-y-6 text-left">
+                    <div className="flex items-center justify-between">
+                      <div className="w-12 h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20">
+                         <Github className="w-6 h-6 text-blue-500" />
+                      </div>
+                      <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.2em]">Step 01</span>
+                    </div>
+                    <div className="space-y-3">
+                      <h3 className="text-xl font-semibold tracking-tight">Connect Identity</h3>
+                      <p className="text-sm text-arc-ink/60 leading-relaxed">
+                        Connect GitHub once during onboarding for identity and developer context.
+                      </p>
+                      <div className="p-3 rounded-xl bg-arc-ink/5 border border-arc-line text-[11px] text-arc-ink/50 italic">
+                        ArcProof does NOT use GitHub activity for reputation scoring. Repos, commits, and history never affect protocol reputation.
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* STEP 02 */}
+                  <div className="glass p-8 rounded-[2rem] border border-arc-line space-y-6 text-left">
+                    <div className="flex items-center justify-between">
+                      <div className="w-12 h-12 rounded-2xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
+                         <ShieldCheck className="w-6 h-6 text-amber-500" />
+                      </div>
+                      <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.2em]">Step 02</span>
+                    </div>
+                    <div className="space-y-3">
+                      <h3 className="text-xl font-semibold tracking-tight">Fund Escrow</h3>
+                      <p className="text-sm text-arc-ink/60 leading-relaxed">
+                        Employers create jobs and lock USDC into on-chain escrow before execution begins.
+                      </p>
+                      <div className="p-3 rounded-xl bg-arc-ink/5 border border-arc-line text-[11px] text-arc-ink/50 italic">
+                        Every funded job becomes an immutable lifecycle record tied to protocol settlement events.
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* STEP 03 */}
+                  <div className="glass p-8 rounded-[2rem] border border-arc-line space-y-6 text-center md:col-span-2 flex flex-col items-center">
+                    <div className="flex items-center justify-between w-full">
+                      <div className="w-12 h-12 rounded-2xl bg-purple-500/10 flex items-center justify-center border border-purple-500/20">
+                         <Zap className="w-6 h-6 text-purple-500" />
+                      </div>
+                      <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.2em]">Step 03</span>
+                    </div>
+                    <div className="space-y-4 max-w-2xl">
+                      <h3 className="text-2xl font-bold tracking-tight">Execute & Settle</h3>
+                      <p className="text-sm text-arc-ink/60 leading-relaxed">
+                        Jobs move through a deterministic lifecycle: REQUESTED → ACCEPTED → COMPLETED → DISPUTED → RESOLVED.
+                      </p>
+                      <div className="p-4 rounded-2xl bg-arc-ink/[0.02] border border-arc-line text-[11px] text-arc-ink/50 italic">
+                        Settlement outcomes are finalized directly from blockchain events. No manual intervention, no protocol bias.
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* STEP 04 */}
+                  <div className="glass p-8 rounded-[3rem] border border-arc-line space-y-8 text-left relative overflow-hidden group col-span-1 md:col-span-2">
+                    <div className="absolute -right-24 -bottom-24 w-64 h-64 bg-emerald-500/5 rounded-full blur-[100px] group-hover:bg-emerald-500/10 transition-all duration-700" />
+                    <div className="absolute -left-24 -top-24 w-64 h-64 bg-amber-500/5 rounded-full blur-[100px] group-hover:bg-amber-500/10 transition-all duration-700" />
+                    
+                    <div className="flex items-center justify-between relative z-10">
+                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 flex items-center justify-center border border-emerald-500/20 shadow-sm">
+                         <Trophy className="w-7 h-7 text-emerald-500" />
+                      </div>
+                      <div className="flex flex-col items-end">
+                        <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.3em]">Phase 04</span>
+                        <span className="text-[10px] font-bold text-emerald-500/60 uppercase">Reputation Mining</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-8 relative z-10">
+                      <div className="space-y-2">
+                        <h3 className="text-2xl font-bold tracking-tight text-arc-ink">Build Protocol Reputation</h3>
+                        <p className="text-sm text-arc-ink/50 leading-relaxed max-w-2xl">
+                          Your reputation is a deterministic soulbound projection of your on-chain behavior. No manual intervention, no social bias—only execution history.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-4">
+                        <div className="space-y-4 p-6 rounded-3xl bg-arc-ink/[0.02] border border-arc-line/50">
+                           <div className="flex items-center justify-between">
+                             <div className="text-[11px] uppercase font-bold text-arc-ink/40 tracking-widest flex items-center gap-2">
+                               <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                               Developer Tiers
+                             </div>
+                             <span className="text-[9px] font-mono text-arc-ink/20 italic">Execution Based</span>
+                           </div>
+                           <div className="grid grid-cols-2 gap-2">
+                              {[
+                                { name: 'Rookie', color: 'text-arc-ink/40 bg-arc-ink/[0.03] border-arc-line' },
+                                { name: 'Reliable', color: 'text-arc-ink/60 bg-arc-ink/[0.03] border-arc-line' },
+                                { name: 'Proven', color: 'text-arc-ink/80 bg-arc-ink/[0.03] border-arc-line' },
+                                { name: 'Elite', color: 'text-arc-ink bg-arc-ink/[0.03] border-arc-line' }
+                              ].map(t => (
+                                <div key={t.name} className={cn("flex items-center justify-center py-3 rounded-xl border text-[11px] font-bold tracking-tight transition-all hover:scale-[1.02]", t.color)}>
+                                  {t.name}
+                                </div>
+                              ))}
+                           </div>
+                        </div>
+
+                        <div className="space-y-4 p-6 rounded-3xl bg-arc-ink/[0.02] border border-arc-line/50">
+                           <div className="flex items-center justify-between">
+                             <div className="text-[11px] uppercase font-bold text-arc-ink/40 tracking-widest flex items-center gap-2">
+                               <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                               Employer Tiers
+                             </div>
+                             <span className="text-[9px] font-mono text-arc-ink/20 italic">Capital Based</span>
+                           </div>
+                           <div className="grid grid-cols-2 gap-2">
+                              {[
+                                { name: 'Bronze', color: 'text-arc-ink/40 bg-arc-ink/[0.03] border-arc-line' },
+                                { name: 'Silver', color: 'text-arc-ink/60 bg-arc-ink/[0.03] border-arc-line' },
+                                { name: 'Gold', color: 'text-arc-ink/80 bg-arc-ink/[0.03] border-arc-line' },
+                                { name: 'Diamond', color: 'text-arc-ink bg-arc-ink/[0.03] border-arc-line' }
+                              ].map(t => (
+                                <div key={t.name} className={cn("flex items-center justify-center py-3 rounded-xl border text-[11px] font-bold tracking-tight transition-all hover:scale-[1.02]", t.color)}>
+                                  {t.name}
+                                </div>
+                              ))}
+                           </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Navigation Buttons for Walkthrough */}
+                <div className="pt-20 flex flex-col md:flex-row items-center justify-center gap-6">
+                  <button 
+                    onClick={() => {
+                      setShowHowItWorks(false);
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="text-sm font-bold uppercase tracking-widest text-arc-ink/30 hover:text-arc-ink transition-all flex items-center gap-2 group"
+                  >
+                    <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-1" />
+                    Back to Home
+                  </button>
+                  <div className="w-px h-6 bg-arc-line hidden md:block" />
+                  <Button 
+                    onClick={() => connect({ connector: connectors[0] })}
+                    className="px-16 py-6 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg flex items-center gap-3 transition-transform hover:scale-105 active:scale-95"
+                  >
+                    <Wallet className="w-5 h-5" />
+                    Enter Protocol Dashboard
+                  </Button>
+                </div>
+              </motion.div>
+            )}
           </div>
         ) : !address ? (
           <div className="h-[70vh] flex items-center justify-center">
@@ -1674,14 +1853,25 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <footer className="mt-auto border-t border-arc-line p-8 bg-white/50 backdrop-blur-sm">
+      <footer className="mt-12 border-t border-arc-line p-12 bg-white/50 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8 opacity-40">
-           <div className="flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5" />
-              <span className="font-serif italic font-medium">ArcProof</span>
+           <div className="flex flex-col items-center md:items-start gap-1">
+              <div className="flex items-center gap-2">
+                 <ShieldCheck className="w-5 h-5" />
+                 <span className="font-serif italic font-medium text-lg">ArcProof</span>
+              </div>
+              <div className="text-[10px] font-mono tracking-tighter uppercase font-bold">
+                 Execution-verified Reputation Protocol
+              </div>
            </div>
-           <div className="text-[10px] font-mono tracking-tighter uppercase font-bold">
-              Execution-verified Reputation Protocol
+           
+           <div className="text-[10px] uppercase font-bold tracking-[0.4em] text-center">
+              built by <a href="http://www.x.com/idnurey" target="_blank" rel="noopener noreferrer" className="text-arc-ink hover:text-blue-500 transition-all duration-300 decoration-arc-ink/20 underline-offset-8 hover:underline">archers</a>
+           </div>
+
+           <div className="flex items-center gap-6 text-[10px] uppercase font-bold tracking-widest">
+              <span className="opacity-50">Mainnet Alpha</span>
+              <span className="opacity-50">V1.0.4</span>
            </div>
         </div>
       </footer>
@@ -2259,30 +2449,34 @@ function EmployerProfile({ address, onSelect }: { address: `0x${string}`, onSele
           />
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 pt-2">
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Completed</div>
-             <div className="text-xl font-mono">{profile.completed}</div>
-          </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Funded</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 pt-2">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Submitted Jobs</div>
              <div className="text-xl font-mono">{profile.funded}</div>
           </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Total Escrow</div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Active Jobs</div>
+             <div className="text-xl font-mono">{profile.active}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Completed Jobs</div>
+             <div className="text-xl font-mono">{profile.completed}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputed Jobs</div>
+             <div className="text-xl font-mono text-purple-600">{profile.disputes}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Escrowed Jobs</div>
              <div className="text-xl font-mono">${Number(formatUnits(profile.paid, USDC_DECIMALS)).toLocaleString()}</div>
           </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Won</div>
              <div className="text-xl font-mono text-emerald-600">+{profile.disputesWon}</div>
           </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Cancelled</div>
-             <div className="text-xl font-mono">{profile.cancelled}</div>
-          </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Lost</div>
-             <div className="text-xl font-mono text-red-500">{profile.disputesLost}</div>
+             <div className="text-xl font-mono text-red-500">-{profile.disputesLost}</div>
           </div>
         </div>
       </div>
@@ -2384,7 +2578,7 @@ function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSel
           />
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 pt-2">
           <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Completed</div>
              <div className="text-xl font-mono">{profile.completed}</div>
@@ -2400,6 +2594,10 @@ function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSel
           <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Won</div>
              <div className="text-xl font-mono text-emerald-600">+{profile.disputesWon}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Lost</div>
+             <div className="text-xl font-mono text-red-500">-{profile.disputesLost}</div>
           </div>
         </div>
       </div>
