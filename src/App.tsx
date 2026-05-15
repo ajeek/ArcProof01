@@ -10,6 +10,7 @@ import {
   Briefcase, 
   Zap, 
   RefreshCcw, 
+  Minus,
   Star,
   Users,
   GitPullRequest,
@@ -818,7 +819,7 @@ export default function App() {
         score: 0, tier: 'Unrated', completionRate: 0, disputePerformance: 0, earningsStability: 0, rated: false
       },
       employer: {
-        funded: 0, completed: 0, cancelled: 0, disputes: 0, disputesWon: 0, disputesLost: 0, paid: 0n, active: 0,
+        funded: 0, open: 0, completed: 0, failed: 0, disputes: 0, disputesWon: 0, disputesLost: 0, paid: 0n, active: 0,
         score: 0, tier: 'Unrated', fundingEfficiency: 0, fairnessIndex: 100, disputeQuality: 0, escrowStability: 0, rated: false
       }
     });
@@ -838,30 +839,33 @@ export default function App() {
         const res = resolutionHistory[id];
 
         emp.funded++;
-        if (status === 4) { // COMPLETED
+        
+        // Deterministic Outcome Tracking
+        if (res) {
+          emp.disputes++;
+          if (res.winner === 'emp') {
+            emp.disputesWon++;
+          } else {
+            emp.disputesLost++;
+          }
+        }
+
+        // New Deterministic Lifecycle Logic
+        const empFailed = (status === 7 || status === 6 || (res && res.winner === 'emp'));
+        const empCompleted = (status === 4 || (res && res.winner === 'dev'));
+        const empActive = !res && (status === 2 || status === 3 || status === 5 || status === 8);
+        const empOpen = !res && (status === 0 || status === 1);
+
+        if (empOpen) emp.open++;
+        if (empActive) emp.active++;
+        if (empCompleted) {
           emp.completed++;
           emp.paid += amount;
-          if (res) {
-            emp.disputes++;
-            if (res.winner === 'dev') emp.disputesLost++;
-            else emp.disputesWon++;
-          }
-        } else if (status === 6) { // CANCELLED
-          emp.cancelled++;
-          if (res) {
-            emp.disputes++;
-            if (res.winner === 'emp') emp.disputesWon++;
-            else emp.disputesLost++;
-          }
-        } else if (status === 5) { // DISPUTED
-          emp.disputes++;
-          emp.active++;
-        } else if ([1, 2, 3, 8].includes(status)) {
-          emp.active++;
         }
+        if (empFailed) emp.failed++;
       }
 
-      if (developerAddr && developerAddr !== zeroAddress) {
+      if (developerAddr && developerAddr !== zeroAddress && developerAddr !== employerAddr) {
         if (!statsMap[developerAddr]) statsMap[developerAddr] = getInitialStats();
         const dev = statsMap[developerAddr].developer;
         const status = Number(jobArray[5]);
@@ -869,26 +873,25 @@ export default function App() {
         const res = resolutionHistory[id];
 
         dev.totalJobs++;
-        if (status === 4) { // COMPLETED
+
+        // New Deterministic Lifecycle Logic
+        const devFailed = res && res.winner === 'emp'; 
+        const devCompleted = (status === 4 || (res && res.winner === 'dev'));
+        const devActive = !res && (status === 2 || status === 3 || status === 5 || status === 8);
+
+        if (devCompleted) {
           dev.completed++;
           dev.earned += amount;
-          if (res) {
-            if (res.winner === 'dev') dev.disputesWon++;
-            else dev.disputesLost++;
-          }
-        } else if (status === 7) { // REJECTED
-          dev.failed++;
-        } else if (status === 6) { // CANCELLED
-          if (res) {
-            if (res.winner === 'emp') dev.disputesLost++;
-            else dev.disputesWon++;
+        }
+        if (devActive) dev.active++;
+        if (devFailed) dev.failed++;
+
+        if (res) {
+          if (res.winner === 'emp') {
+            dev.disputesLost++;
           } else {
-            dev.failed++;
+            dev.disputesWon++;
           }
-        } else if (status === 5) { // DISPUTED
-          dev.active++;
-        } else if ([2, 3, 8].includes(status)) {
-          dev.active++;
         }
       }
     });
@@ -1181,19 +1184,20 @@ export default function App() {
                   </div>
 
                   {/* STEP 03 */}
-                  <div className="glass p-8 rounded-[2rem] border border-arc-line space-y-6 text-center md:col-span-2 flex flex-col items-center">
-                    <div className="flex items-center justify-between w-full">
-                      <div className="w-12 h-12 rounded-2xl bg-purple-500/10 flex items-center justify-center border border-purple-500/20">
-                         <Zap className="w-6 h-6 text-purple-500" />
+                  <div className="glass p-12 rounded-[3rem] border border-arc-line space-y-8 text-center md:col-span-2 flex flex-col items-center relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-b from-purple-500/[0.02] to-transparent pointer-events-none" />
+                    <div className="flex flex-col items-center gap-4 relative z-10">
+                      <div className="w-16 h-16 rounded-3xl bg-purple-500/10 flex items-center justify-center border border-purple-500/20 shadow-sm shadow-purple-500/5">
+                         <Zap className="w-8 h-8 text-purple-500" />
                       </div>
-                      <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.2em]">Step 03</span>
+                      <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.4em]">Step 03</span>
                     </div>
-                    <div className="space-y-4 max-w-2xl">
-                      <h3 className="text-2xl font-bold tracking-tight">Execute & Settle</h3>
-                      <p className="text-sm text-arc-ink/60 leading-relaxed">
+                    <div className="space-y-6 max-w-2xl relative z-10">
+                      <h3 className="text-3xl font-medium tracking-tight text-arc-ink">Execute & Settle</h3>
+                      <p className="text-base text-arc-ink/50 leading-relaxed font-sans font-normal">
                         Jobs move through a deterministic lifecycle: REQUESTED → ACCEPTED → COMPLETED → DISPUTED → RESOLVED.
                       </p>
-                      <div className="p-4 rounded-2xl bg-arc-ink/[0.02] border border-arc-line text-[11px] text-arc-ink/50 italic">
+                      <div className="p-6 rounded-[2rem] bg-arc-ink/[0.03] border border-arc-line text-sm text-arc-ink/60 italic font-sans font-normal">
                         Settlement outcomes are finalized directly from blockchain events. No manual intervention, no protocol bias.
                       </div>
                     </div>
@@ -1231,14 +1235,14 @@ export default function App() {
                              </div>
                              <span className="text-[9px] font-mono text-arc-ink/20 italic">Execution Based</span>
                            </div>
-                           <div className="grid grid-cols-2 gap-2">
+                           <div className="grid grid-cols-2 gap-3">
                               {[
-                                { name: 'Rookie', color: 'text-arc-ink/40 bg-arc-ink/[0.03] border-arc-line' },
-                                { name: 'Reliable', color: 'text-arc-ink/60 bg-arc-ink/[0.03] border-arc-line' },
-                                { name: 'Proven', color: 'text-arc-ink/80 bg-arc-ink/[0.03] border-arc-line' },
-                                { name: 'Elite', color: 'text-arc-ink bg-arc-ink/[0.03] border-arc-line' }
+                                { name: 'Rookie' },
+                                { name: 'Reliable' },
+                                { name: 'Proven' },
+                                { name: 'Elite' }
                               ].map(t => (
-                                <div key={t.name} className={cn("flex items-center justify-center py-3 rounded-xl border text-[11px] font-bold tracking-tight transition-all hover:scale-[1.02]", t.color)}>
+                                <div key={t.name} className="flex items-center justify-center py-4 rounded-2xl border border-arc-line bg-arc-ink/[0.02] text-[11px] font-medium tracking-tight text-arc-ink/60 hover:bg-arc-ink/[0.04] transition-all hover:scale-[1.02]">
                                   {t.name}
                                 </div>
                               ))}
@@ -1253,14 +1257,14 @@ export default function App() {
                              </div>
                              <span className="text-[9px] font-mono text-arc-ink/20 italic">Capital Based</span>
                            </div>
-                           <div className="grid grid-cols-2 gap-2">
+                           <div className="grid grid-cols-2 gap-3">
                               {[
-                                { name: 'Bronze', color: 'text-arc-ink/40 bg-arc-ink/[0.03] border-arc-line' },
-                                { name: 'Silver', color: 'text-arc-ink/60 bg-arc-ink/[0.03] border-arc-line' },
-                                { name: 'Gold', color: 'text-arc-ink/80 bg-arc-ink/[0.03] border-arc-line' },
-                                { name: 'Diamond', color: 'text-arc-ink bg-arc-ink/[0.03] border-arc-line' }
+                                { name: 'Bronze' },
+                                { name: 'Silver' },
+                                { name: 'Gold' },
+                                { name: 'Diamond' }
                               ].map(t => (
-                                <div key={t.name} className={cn("flex items-center justify-center py-3 rounded-xl border text-[11px] font-bold tracking-tight transition-all hover:scale-[1.02]", t.color)}>
+                                <div key={t.name} className="flex items-center justify-center py-4 rounded-2xl border border-arc-line bg-arc-ink/[0.02] text-[11px] font-medium tracking-tight text-arc-ink/60 hover:bg-arc-ink/[0.04] transition-all hover:scale-[1.02]">
                                   {t.name}
                                 </div>
                               ))}
@@ -1574,7 +1578,6 @@ export default function App() {
                       className="space-y-6"
                     >
                       <DeveloperProfile address={address!} onSelect={setSelectedJobId} />
-                      <JobExplorer address={address!} role="developer" onSelect={setSelectedJobId} />
                     </motion.div>
                   ) : (
                     <motion.div 
@@ -1621,6 +1624,10 @@ export default function App() {
                                   setAutoFlowJobId(null);
                                   setCreationStatus('success');
                                 }} 
+                                onCancel={() => {
+                                  setAutoFlowJobId(null);
+                                  setCreationStatus('idle');
+                                }}
                               />
                             )}
                             <EmployerPanel 
@@ -1790,6 +1797,11 @@ export default function App() {
                          setCreationStatus('success');
                          if (txHash) setSuccessHash(txHash);
                        }} 
+                       onCancel={() => {
+                         setCreationStatus('idle');
+                         setShowJobSuccessModal(false);
+                         setAutoFlowJobId(null);
+                       }}
                     />
                 </div>
               ) : (
@@ -1882,7 +1894,7 @@ export default function App() {
 
 // --- Specific Components ---
 
-function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, onComplete: (hash?: string) => void, compact?: boolean }) {
+function SequentialFundingFlow({ jobId, onComplete, onCancel, compact }: { jobId: bigint, onComplete: (hash?: string) => void, onCancel?: () => void, compact?: boolean }) {
   const { address } = useAccount();
   const queryClient = useQueryClient();
   const { data: job, refetch: refetchJob } = useReadContract({
@@ -2108,6 +2120,11 @@ function SequentialFundingFlow({ jobId, onComplete, compact }: { jobId: bigint, 
                 }} className="text-white hover:bg-white/10 text-[10px] h-7 border border-white/20">
                   Retry
                 </Button>
+                {onCancel && (
+                  <Button variant="ghost" size="sm" onClick={onCancel} className="text-white/60 hover:bg-white/10 text-[10px] h-7 border border-white/20">
+                    Back to Create Escrow
+                  </Button>
+                )}
               </div>
             )}
          </div>
@@ -2123,9 +2140,8 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [requirements, setRequirements] = useState('');
-  const [duration, setDuration] = useState('14');
-  const [amount, setAmount] = useState('');
-  const [upfront, setUpfront] = useState(0);
+  const [duration, setDuration] = useState(''); // Default blank
+  const [amount, setAmount] = useState('0.00'); // Default 0.00
   
   const { data: devProfileData } = useReadContract({
     address: REPUTATION_REGISTRY_ADDRESS,
@@ -2134,14 +2150,6 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
     args: devAddress && devAddress.startsWith('0x') && devAddress.length === 42 && devAddress !== zeroAddress ? [devAddress as `0x${string}`] : undefined,
     query: { enabled: devAddress.startsWith('0x') && devAddress.length === 42 && devAddress !== zeroAddress }
   });
-
-  const devScore = devProfileData ? (devProfileData as any).reputation?.coreIndex || 0 : 0;
-  const maxUpfront = devScore > 80 ? 50 : devScore >= 50 ? 25 : 0;
-
-  // Reactively adjust upfront if it exceeds allowed max
-  useEffect(() => {
-    if (upfront > maxUpfront) setUpfront(0);
-  }, [maxUpfront, upfront]);
 
   const { writeContract, data: hash, isPending, error: writeError } = useWriteContract();
   const { data: receipt, isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash, confirmations: 1 });
@@ -2161,15 +2169,12 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
 
   const hasProcessedReceipt = useRef<string | null>(null);
 
-  // Extract jobId from receipt for immediate flow
-  // Handle Confirmation & Parent Notification
   useEffect(() => {
     const titleVal = title;
     const descVal = description;
     const reqVal = requirements;
     const durVal = duration;
     const amtVal = amount;
-    const upfVal = upfront;
 
     if (isConfirmed && receipt && hasProcessedReceipt.current !== receipt.transactionHash) {
       hasProcessedReceipt.current = receipt.transactionHash;
@@ -2182,13 +2187,13 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
         });
         if (logs.length > 0) {
           const jobId = (logs[0] as any).args.jobId;
-          onJobCreated(jobId, { title: titleVal, description: descVal, requirements: reqVal, duration: durVal, amount: amtVal, upfront: upfVal });
+          onJobCreated(jobId, { title: titleVal, description: descVal, requirements: reqVal, duration: durVal, amount: amtVal, upfront: 0 });
         }
       } catch (e) {
         console.error("Failed to parse logs from receipt", e);
       }
     }
-  }, [isConfirmed, receipt, onJobCreated, onCreating, title, description, requirements, duration, amount, upfront]);
+  }, [isConfirmed, receipt, onJobCreated, onCreating, title, description, requirements, duration, amount]);
 
   const handleCreate = () => {
     if (!devAddress || !amount || !title || !description) {
@@ -2203,14 +2208,51 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
       duration: Number(duration)
     });
 
-    onCreationStart({ title, description, requirements, duration, amount, upfront });
+    onCreationStart({ title, description, requirements, duration, amount, upfront: 0 });
 
     writeContract({
       address: JOB_ESCROW_ADDRESS,
       abi: JOB_ESCROW_ABI,
       functionName: 'createJob',
-      args: [devAddress as `0x${string}`, parseUnits(amount, USDC_DECIMALS), BigInt(upfront), metadata],
+      args: [devAddress as `0x${string}`, parseUnits(amount, USDC_DECIMALS), BigInt(0), metadata],
     } as any);
+  };
+
+  const handleTitleChange = (val: string) => {
+    // Only letters and spaces allowed
+    const sanitized = val.replace(/[^a-zA-Z\s]/g, "");
+    setTitle(sanitized);
+  };
+
+  const handleDescriptionChange = (val: string) => {
+    // Alphanumeric and spaces/line breaks only
+    const sanitized = val.replace(/[^a-zA-Z0-9\s\n\r]/g, "");
+    setDescription(sanitized);
+  };
+
+  const handleAmountChange = (val: string) => {
+    // Floating point number only, reject scientific notation
+    if (val.toLowerCase().includes('e')) return;
+    if (/^\d*\.?\d*$/.test(val)) {
+      setAmount(val);
+    }
+  };
+
+  const handleAmountBlur = () => {
+    const val = parseFloat(amount || "0");
+    if (isNaN(val)) {
+      setAmount("0.00");
+    } else {
+      setAmount(val.toFixed(2));
+    }
+  };
+
+  const adjustDuration = (delta: number) => {
+    setDuration(prev => {
+      const current = Number(prev) || 0;
+      const newVal = Math.max(1, Math.min(365, current + delta));
+      return newVal.toString();
+    });
   };
 
   return (
@@ -2225,9 +2267,9 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
           <label className="text-[10px] uppercase tracking-widest font-bold text-arc-ink/40 px-1">Job Title</label>
           <input 
             type="text" 
-            placeholder="e.gae UI Redesign for DeFi App" 
+            placeholder="e.g. UI Redesign for DeFi App" 
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => handleTitleChange(e.target.value)}
             className="w-full px-4 py-2.5 rounded-xl bg-arc-paper border border-arc-line focus:outline-none focus:ring-1 focus:ring-arc-ink/20 transition-all text-sm"
           />
         </div>
@@ -2237,7 +2279,7 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
           <textarea 
             placeholder="Detailed scope of work..." 
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => handleDescriptionChange(e.target.value)}
             rows={3}
             className="w-full px-4 py-2.5 rounded-xl bg-arc-paper border border-arc-line focus:outline-none focus:ring-1 focus:ring-arc-ink/20 transition-all text-sm resize-none"
           />
@@ -2254,59 +2296,72 @@ function EmployerPanel({ onJobCreated, onCreating, onCreationStart, onCreationEr
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <label className="text-[10px] uppercase tracking-widest font-bold text-arc-ink/40 px-1">Duration (Days)</label>
-            <input 
-              type="number" 
-              placeholder="14" 
-              value={duration}
-              onChange={(e) => setDuration(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl bg-arc-paper border border-arc-line focus:outline-none focus:ring-1 focus:ring-arc-ink/20 transition-all font-mono text-sm"
-            />
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="secondary" 
+                size="sm" 
+                onClick={() => adjustDuration(-1)}
+                className="h-10 px-3 border border-arc-line bg-arc-paper hover:bg-arc-line/10 transition-colors"
+              >
+                <Minus className="w-4 h-4" />
+              </Button>
+              <input 
+                type="number" 
+                min="1"
+                max="365"
+                placeholder="Duration" 
+                value={duration}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  if (isNaN(val)) setDuration("");
+                  else setDuration(Math.max(1, Math.min(365, val)).toString());
+                }}
+                className="w-full px-4 py-2.5 h-10 rounded-xl bg-arc-paper border border-arc-line focus:outline-none focus:ring-1 focus:ring-arc-ink/20 transition-all font-mono text-sm text-center"
+              />
+              <Button 
+                variant="secondary" 
+                size="sm" 
+                onClick={() => adjustDuration(1)}
+                className="h-10 px-3 border border-arc-line bg-arc-paper hover:bg-arc-line/10 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <label className="text-[10px] uppercase tracking-widest font-bold text-arc-ink/40 px-1">Total Budget (USDC)</label>
             <input 
-              type="number" 
+              type="text" 
               placeholder="0.00" 
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl bg-arc-paper border border-arc-line focus:outline-none focus:ring-1 focus:ring-arc-ink/20 transition-all font-mono text-sm"
+              onChange={(e) => handleAmountChange(e.target.value)}
+              onBlur={handleAmountBlur}
+              className="w-full px-4 py-2.5 h-10 rounded-xl bg-arc-paper border border-arc-line focus:outline-none focus:ring-1 focus:ring-arc-ink/20 transition-all font-mono text-sm"
             />
           </div>
-          <div className="space-y-2">
-            <label className="text-[10px] uppercase tracking-widest font-bold text-arc-ink/40 px-1">Upfront Percentage</label>
-            <div className="flex gap-2">
-              {[0, 25, 50].map(v => (
-                <button 
-                  key={v}
-                  disabled={v > maxUpfront}
-                  onClick={() => setUpfront(v)}
-                  className={cn(
-                    "flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all border",
-                    upfront === v ? "bg-arc-ink text-white border-arc-ink" : "bg-white text-arc-ink/40 border-arc-line hover:border-arc-ink/20 disabled:opacity-20 disabled:cursor-not-allowed"
-                  )}
-                >
-                  {v}%
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
-      </div>
 
-      <Button 
-        onClick={handleCreate} 
-        loading={isPending || isConfirming}
-        disabled={!amount || !title}
-        className="w-full py-3 shadow-xl shadow-arc-ink/10"
-      >
-        Create a USDC Job Escrow
-      </Button>
+        <Button 
+          onClick={handleCreate} 
+          disabled={isPending || isConfirming} 
+          className="w-full py-4 rounded-2xl shadow-xl shadow-arc-ink/10 flex items-center justify-center gap-2"
+        >
+          {isPending || isConfirming ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              Securing Escrow...
+            </>
+          ) : (
+            <>
+              <Zap className="w-5 h-5" />
+              Initialize & Fund Escrow
+            </>
+          )}
+        </Button>
+      </div>
     </Card>
   );
 }
@@ -2449,32 +2504,36 @@ function EmployerProfile({ address, onSelect }: { address: `0x${string}`, onSele
           />
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 pt-2">
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
-             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Submitted Jobs</div>
-             <div className="text-xl font-mono">{profile.funded}</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 pt-2">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Open Jobs</div>
+             <div className="text-xl font-mono">{profile.open}</div>
           </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Active Jobs</div>
              <div className="text-xl font-mono">{profile.active}</div>
           </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Completed Jobs</div>
              <div className="text-xl font-mono">{profile.completed}</div>
           </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
+             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Failed Settlements</div>
+             <div className="text-xl font-mono text-red-500">{profile.failed}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputed Jobs</div>
              <div className="text-xl font-mono text-purple-600">{profile.disputes}</div>
           </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Escrowed Jobs</div>
-             <div className="text-xl font-mono">${Number(formatUnits(profile.paid, USDC_DECIMALS)).toLocaleString()}</div>
+             <div className="text-xl font-mono text-emerald-600">${Number(formatUnits(profile.paid, USDC_DECIMALS)).toLocaleString()}</div>
           </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Won</div>
              <div className="text-xl font-mono text-emerald-600">+{profile.disputesWon}</div>
           </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center text-nowrap">
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Lost</div>
              <div className="text-xl font-mono text-red-500">-{profile.disputesLost}</div>
           </div>
@@ -2485,10 +2544,51 @@ function EmployerProfile({ address, onSelect }: { address: `0x${string}`, onSele
 }
 
 function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSelect: (id: bigint) => void }) {
-  const { jobIdentities, allJobs, refetchJobs, jobsData, derivedStats } = useAppContext();
+  const { jobIdentities, allJobs: rawAllJobs, refetchJobs, jobsData, derivedStats, resolutionHistory } = useAppContext();
+  
+  const allJobs = useMemo(() => {
+    return rawAllJobs.filter(id => {
+      const job = jobsData[id.toString()];
+      if (!job) return true; // Keep visible if data not yet loaded to prevent total flicker
+      const employerAddr = (job[0] || "").toString().toLowerCase();
+      // Strict Role Isolation: exclude if user is the employer
+      const isUserEmployer = employerAddr === address?.toLowerCase();
+      return !isUserEmployer;
+    });
+  }, [rawAllJobs, jobsData, address]);
+
   const hasJobs = allJobs.length > 0;
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const items = useMemo(() => {
+    const active: bigint[] = [];
+    const completed: bigint[] = [];
+    const failed: bigint[] = [];
+
+    allJobs.forEach(id => {
+      const job = jobsData[id.toString()];
+      if (!job) return;
+      
+      const developer = job[1];
+      const status = job[5];
+      if (!developer || developer === zeroAddress) return;
+      if (developer.toLowerCase() !== address?.toLowerCase()) return;
+      
+      const s = Number(status);
+      const res = resolutionHistory[id.toString()];
+      
+      const isFailed = res && res.winner === 'emp';
+      const isCompleted = s === 4 || (res && res.winner === 'dev');
+      const isActive = (s === 2 || s === 3 || s === 5 || s === 8) && !res;
+
+      if (isActive) active.push(id);
+      if (isCompleted) completed.push(id);
+      if (isFailed) failed.push(id);
+    });
+
+    return { active, completed, failed };
+  }, [allJobs, jobsData, address, resolutionHistory]);
+
   const profile = derivedStats.developer;
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -2506,9 +2606,9 @@ function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSel
   };
 
   const counts = {
-    active: profile.active,
-    completed: profile.completed,
-    rejected: profile.failed
+    active: items.active.length,
+    completed: items.completed.length,
+    failed: items.failed.length
   };
 
   return (
@@ -2602,44 +2702,81 @@ function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSel
         </div>
       </div>
 
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-medium tracking-tight">Your Work History</h2>
-          <Badge className="bg-arc-ink text-white">Live Lifecycle</Badge>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          <CollapsibleJobGroup title="My Active Jobs" icon={Clock} defaultOpen={true} count={counts.active}>
-            {hasJobs ? allJobs.map(id => (
-              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="active" onSelect={onSelect} />
-            )) : (
-              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No active jobs found.</div>
-            )}
-          </CollapsibleJobGroup>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-medium tracking-tight">Work History</h2>
+            <Badge className="bg-arc-ink text-white">Live Lifecycle</Badge>
+          </div>
           
-          <CollapsibleJobGroup title="My Completed Jobs" icon={CircleCheck} count={counts.completed}>
-            {hasJobs ? allJobs.map(id => (
-              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="completed" onSelect={onSelect} />
-            )) : (
-              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No completed jobs found.</div>
-            )}
-          </CollapsibleJobGroup>
+          <div className="space-y-6">
+            <CollapsibleJobGroup title="Active Jobs" icon={Clock} defaultOpen={true} count={counts.active}>
+              {items.active.length > 0 ? items.active.map(id => (
+                <JobCard key={id.toString()} jobId={id} viewerAddress={address} compact onSelect={onSelect} role="developer" />
+              )) : (
+                <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No active jobs found.</div>
+              )}
+            </CollapsibleJobGroup>
+            
+            <CollapsibleJobGroup title="Completed Jobs" icon={CircleCheck} count={counts.completed}>
+              {items.completed.length > 0 ? items.completed.map(id => (
+                <JobCard key={id.toString()} jobId={id} viewerAddress={address} compact onSelect={onSelect} role="developer" />
+              )) : (
+                <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No completed jobs found.</div>
+              )}
+            </CollapsibleJobGroup>
 
-          <CollapsibleJobGroup title="Rejected Jobs" icon={X} count={counts.rejected}>
-            {hasJobs ? allJobs.map(id => (
-              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="rejected" onSelect={onSelect} />
-            )) : (
-              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No rejected jobs found.</div>
+            <CollapsibleJobGroup title="Failed Settlements" icon={XCircle} count={counts.failed}>
+              {items.failed.length > 0 ? items.failed.map(id => (
+                <JobCard key={id.toString()} jobId={id} viewerAddress={address} compact onSelect={onSelect} role="developer" />
+              )) : (
+                <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No failed settlements found.</div>
+              )}
+            </CollapsibleJobGroup>
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-medium tracking-tight">Available Markets</h2>
+            <Badge className="bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 shadow-sm shadow-emerald-500/5">Live Opportunities</Badge>
+          </div>
+          
+          <div className="space-y-4">
+            {allJobs.length > 0 ? (
+              <div className="space-y-4">
+                {allJobs.map(id => {
+                  const identity = jobIdentities[id.toString()];
+                  const job = jobsData[id.toString()];
+                  if (!job) return null;
+                  const status = Number(job[5]);
+                  // Only show funded and not assigned jobs as "opportunities"
+                  if (status === 1 && (identity?.developer === zeroAddress || !identity?.developer)) {
+                    return <JobCard key={id.toString()} jobId={id} viewerAddress={address} compact onSelect={onSelect} />;
+                  }
+                  return null;
+                })}
+              </div>
+            ) : (
+              <div className="p-12 border border-dashed border-arc-line rounded-3xl flex flex-col items-center justify-center text-center space-y-4 bg-arc-ink/[0.02]">
+                <div className="p-4 bg-arc-ink/5 rounded-full">
+                   <Zap className="w-8 h-8 text-arc-ink/20" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-arc-ink/60">No new opportunities</p>
+                  <p className="text-xs text-arc-ink/30">Check back later for newly funded jobs.</p>
+                </div>
+              </div>
             )}
-          </CollapsibleJobGroup>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, mode: 'active' | 'completed' | 'rejected', onSelect: (id: bigint) => void }) {
-  const { jobsData } = useAppContext();
+function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, mode: 'active' | 'completed' | 'failed', onSelect: (id: bigint) => void }) {
+  const { jobsData, resolutionHistory } = useAppContext();
   const job = jobsData[jobId.toString()];
 
   if (!job) return null;
@@ -2650,37 +2787,25 @@ function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect }: { key?: stri
   
   const isMine = developer.toLowerCase() === viewerAddress?.toLowerCase();
   const s = Number(status);
-  const isActive = s === 2 || s === 3 || s === 5; // Assigned, WorkSubmitted, Disputed
-  const isCompleted = s === 4;
-  const isRejected = s === 7;
+  const res = resolutionHistory[jobId.toString()];
+  
+  // Deterministic Lifecycle Logic
+  const isFailed = res && res.winner === 'emp';
+  const isCompleted = s === 4 || (res && res.winner === 'dev');
+  const isActive = (s === 2 || s === 3 || s === 5 || s === 8) && !res;
 
   if (mode === 'active' && (!isMine || !isActive)) return null;
   if (mode === 'completed' && (!isMine || !isCompleted)) return null;
-  if (mode === 'rejected' && (!isMine || !isRejected)) return null;
+  if (mode === 'failed' && (!isMine || !isFailed)) return null;
 
   return <JobCard jobId={jobId} viewerAddress={viewerAddress} compact onSelect={onSelect} role="developer" />;
 }
 
 function JobExplorer({ address, role, onSelect }: { address: `0x${string}`, role: 'developer' | 'employer', onSelect: (id: bigint) => void }) {
-  const { allJobs, jobIdentities, jobsData } = useAppContext();
-  
-  const counts = useMemo(() => {
-    const c = { active: 0, completed: 0, rejected: 0 };
-    allJobs.forEach(id => {
-       const identity = jobIdentities[id.toString()];
-       const isMine = identity?.developer?.toLowerCase() === address?.toLowerCase();
-       if (isMine) {
-          const job = jobsData[id.toString()];
-          if (job) {
-             const s = Number(job[5]);
-             if (s === 2 || s === 3 || s === 5) c.active++;
-             else if (s === 4) c.completed++;
-             else if (s === 7) c.rejected++;
-          }
-       }
-    });
-    return c;
-  }, [allJobs, jobIdentities, jobsData, address]);
+  const { derivedStats } = useAppContext();
+  const profile = derivedStats.employer;
+
+  if (role === 'developer') return null; // Logic moved to DeveloperProfile
 
   if (role === 'employer') {
     return (
@@ -2692,142 +2817,89 @@ function JobExplorer({ address, role, onSelect }: { address: `0x${string}`, role
           </div>
         </div>
 
-        <div className="space-y-12">
-          <EmployerJobSection 
-            title="My Active Jobs" 
-            address={address} 
-            statuses={[0, 1, 2, 3]} 
-            onSelect={onSelect} 
-          />
-          <EmployerJobSection 
-            title="My Completed Jobs" 
-            address={address} 
-            statuses={[4]} 
-            onSelect={onSelect} 
-          />
-          <EmployerJobSection 
-            title="Rejected Jobs" 
-            address={address} 
-            statuses={[7]} 
-            onSelect={onSelect} 
-          />
-          <EmployerJobSection 
-            title="Cancelled Jobs" 
-            address={address} 
-            statuses={[6]} 
-            onSelect={onSelect} 
-          />
-          <EmployerJobSection 
-            title="In Dispute" 
-            address={address} 
-            statuses={[5]} 
-            onSelect={onSelect} 
-          />
+        <div className="space-y-6">
+          <CollapsibleJobGroup title="Open Jobs" icon={Zap} defaultOpen={true} count={profile.open}>
+            <EmployerJobSection 
+              address={address} 
+              statuses={[0, 1]} 
+              onSelect={onSelect} 
+            />
+          </CollapsibleJobGroup>
+
+          <CollapsibleJobGroup title="Active Jobs" icon={Clock} count={profile.active}>
+            <EmployerJobSection 
+              address={address} 
+              statuses={[2, 3, 5, 8]} 
+              onSelect={onSelect} 
+            />
+          </CollapsibleJobGroup>
+
+          <CollapsibleJobGroup title="Completed Jobs" icon={CircleCheck} count={profile.completed}>
+            <EmployerJobSection 
+              address={address} 
+              statuses={[4]} 
+              isCompletedGroup
+              onSelect={onSelect} 
+            />
+          </CollapsibleJobGroup>
+
+          <CollapsibleJobGroup title="Failed Settlements" icon={XCircle} count={profile.failed}>
+            <EmployerJobSection 
+              address={address} 
+              statuses={[7]} 
+              isFailedSettlement
+              onSelect={onSelect} 
+            />
+          </CollapsibleJobGroup>
         </div>
       </div>
     );
   }
 
-  const hasJobs = allJobs.length > 0;
-
-  return (
-    <div className="space-y-10">
-      <div className="flex items-center justify-between">
-         <h2 className="text-xl font-medium tracking-tight">Contract Work Explorer</h2>
-         <Badge className="bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">Live Opportunities</Badge>
-      </div>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="space-y-6">
-          <CollapsibleJobGroup title="My Active Jobs" icon={Zap} count={counts.active}>
-            {hasJobs ? allJobs.map(id => (
-              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="active" onSelect={onSelect} />
-            )) : (
-              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No active jobs found.</div>
-            )}
-          </CollapsibleJobGroup>
-
-          <CollapsibleJobGroup title="My Completed Jobs" icon={CircleCheck} count={counts.completed}>
-            {hasJobs ? allJobs.map(id => (
-              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="completed" onSelect={onSelect} />
-            )) : (
-              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No completed jobs found.</div>
-            )}
-          </CollapsibleJobGroup>
-
-          <CollapsibleJobGroup title="Rejected Jobs" icon={X} count={counts.rejected}>
-            {hasJobs ? allJobs.map(id => (
-              <JobFilterWrapper key={id.toString()} jobId={id} viewerAddress={address} mode="rejected" onSelect={onSelect} />
-            )) : (
-              <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No rejected jobs found.</div>
-            )}
-          </CollapsibleJobGroup>
-        </div>
-
-        <div className="space-y-6">
-          <div className="text-xs font-bold uppercase tracking-widest text-arc-ink/40 mb-2">Available Opportunities</div>
-          {allJobs.length > 0 ? (
-            <div className="space-y-4">
-              {allJobs.map(id => {
-                const identity = jobIdentities[id.toString()];
-                const job = jobsData[id.toString()];
-                if (!job) return null;
-                const status = Number(job[5]);
-                // Only show funded and not assigned jobs as "opportunities"
-                if (status === 1 && identity?.developer === zeroAddress) {
-                  return <JobCard key={id.toString()} jobId={id} viewerAddress={address} compact onSelect={onSelect} />;
-                }
-                return null;
-              })}
-            </div>
-          ) : (
-            <div className="p-12 border border-dashed border-arc-line rounded-3xl flex flex-col items-center justify-center text-center space-y-4 bg-arc-ink/[0.02]">
-              <div className="p-4 bg-arc-ink/5 rounded-full">
-                <Briefcase className="w-8 h-8 text-arc-ink/20" />
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm font-bold text-arc-ink/60">No Opportunities Available</p>
-                <p className="text-[11px] text-arc-ink/30">New escrow contracts will appear here once funded.</p>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  return null;
 }
 
-function EmployerJobSection({ title, address, statuses, onSelect }: { title: string, address: `0x${string}`, statuses: number[], onSelect: (id: bigint) => void }) {
-  const { allJobs, jobIdentities, jobsData } = useAppContext();
+function EmployerJobSection({ address, statuses, onSelect, isFailedSettlement, isCompletedGroup }: { address: `0x${string}`, statuses: number[], onSelect: (id: bigint) => void, isFailedSettlement?: boolean, isCompletedGroup?: boolean }) {
+  const { allJobs, jobsData, resolutionHistory } = useAppContext();
   
   const relevantJobs = useMemo(() => {
     return allJobs.filter(id => {
-      const identity = jobIdentities[id.toString()];
-      const isMine = identity?.employer?.toLowerCase() === address?.toLowerCase();
-      if (!isMine) return false;
       const job = jobsData[id.toString()];
       if (!job) return false;
+      
+      const employerAddr = (job[0] || "").toString().toLowerCase();
+      const isMine = employerAddr === address?.toLowerCase();
+      if (!isMine) return false;
+
       const status = Number(job[5]);
+      const res = resolutionHistory[id.toString()];
+      
+      if (isFailedSettlement) {
+         // Employer view "Failed Settlements" = Won by Employer (developer lost) or legacy rejected/cancelled
+         return (status === 7 || status === 6 || (res && res.winner === 'emp'));
+      }
+
+      if (isCompletedGroup) {
+         // Employer view "Completed Jobs" = Normally completed or won by Developer (employer lost)
+         return (status === 4 || (res && res.winner === 'dev'));
+      }
+
+      // Active jobs (or Open) should not show if they are already resolved/settled
+      if (res || status === 4 || status === 6 || status === 7) return false;
+
       return statuses.includes(status);
     });
-  }, [allJobs, jobIdentities, jobsData, address, statuses]);
+  }, [allJobs, jobsData, address, statuses, isFailedSettlement, isCompletedGroup, resolutionHistory]);
 
-  if (relevantJobs.length === 0) return null;
+  if (relevantJobs.length === 0) {
+    return <div className="text-xs text-arc-ink/30 italic p-4 border border-dashed border-arc-line rounded-2xl">No projects found in this stage.</div>;
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="w-1.5 h-6 bg-arc-ink rounded-full" />
-        <h3 className="text-lg font-medium tracking-tight flex items-center gap-2">
-          {title}
-          <Badge className="bg-arc-ink/5 text-arc-ink/40">{relevantJobs.length}</Badge>
-        </h3>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {relevantJobs.map(id => (
-           <JobCard key={id.toString()} jobId={id} viewerAddress={address} compact onSelect={onSelect} role="employer" />
-        ))}
-      </div>
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {relevantJobs.map(id => (
+         <JobCard key={id.toString()} jobId={id} viewerAddress={address} compact onSelect={onSelect} role="employer" />
+      ))}
     </div>
   );
 }
@@ -3070,7 +3142,7 @@ function CountdownTimer({ jobId, durationDays, compact }: { jobId: bigint, durat
 
   return (
     <div className={cn(
-      "flex items-center gap-1.5 rounded-lg bg-arc-ink/5 border border-arc-line",
+      "flex items-center gap-1.5 rounded-lg bg-arc-ink/5 border border-arc-line transition-all duration-300",
       compact ? "px-1.5 py-0.5" : "px-3 py-1.5"
     )}>
       <Clock className={cn("text-arc-ink/40", compact ? "w-3 h-3" : "w-3.5 h-3.5")} />
@@ -3081,6 +3153,72 @@ function CountdownTimer({ jobId, durationDays, compact }: { jobId: bigint, durat
         {!compact && <span className="text-[10px] font-mono opacity-40">{timeLeft.s}s</span>}
       </div>
       {!compact && <span className="text-[10px] uppercase font-bold text-arc-ink/40 tracking-wider ml-1">Left</span>}
+    </div>
+  );
+}
+
+function ActiveWalletIdentity({ 
+  address, 
+  fallback, 
+  className,
+  stats,
+  mode = 'detailed'
+}: { 
+  address: string, 
+  fallback?: string, 
+  className?: string,
+  stats?: { tier: string, score: number },
+  mode?: 'summary' | 'detailed'
+}) {
+  const { data: github } = useReadContract({
+    address: REPUTATION_REGISTRY_ADDRESS,
+    abi: REPUTATION_REGISTRY_ABI,
+    functionName: 'addressToGithub',
+    args: address ? [address as `0x${string}`] : undefined,
+    query: { enabled: !!address && address !== zeroAddress }
+  });
+
+  const username = (github && github !== zeroAddress && github !== "") ? github as string : null;
+  const addressFallback = fallback || (address ? `${address.slice(0, 8)}...` : 'Unknown');
+
+  if (mode === 'summary') {
+    return (
+      <div className={cn("font-mono text-[10px] items-center gap-1.5", className)}>
+        {username ? (
+          <GitHubHoverPreview username={username} />
+        ) : (
+          <span className="opacity-60">{addressFallback}</span>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn("flex flex-col gap-1", className)}>
+      <div className="font-mono flex items-center gap-1.5 text-xs">
+        {username ? (
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2">
+              <span className="text-arc-ink/40 font-bold uppercase tracking-widest text-[10px]">GitHub:</span>
+              <GitHubHoverPreview username={username} />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-arc-ink/40 font-bold uppercase tracking-widest text-[10px]">Wallet:</span>
+              <span className="opacity-60 text-[10px]">{addressFallback}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className="text-arc-ink/40 font-bold uppercase tracking-widest text-[10px]">Wallet:</span>
+            <span className="opacity-60 text-xs">{addressFallback}</span>
+          </div>
+        )}
+      </div>
+      {stats && (
+        <Badge className="bg-arc-ink text-white shrink-0 w-fit">
+          {stats.tier} ({stats.score})
+        </Badge>
+      )}
     </div>
   );
 }
@@ -3494,11 +3632,11 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { key?: stri
     return (
       <Card 
         onClick={() => onSelect?.(jobId)}
-        className="p-4 space-y-3 cursor-pointer hover:border-arc-ink/40 transition-all group"
+        className="p-4 space-y-3 cursor-pointer hover:border-arc-ink/40 transition-all group relative overflow-hidden"
       >
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2 overflow-hidden">
-             <div className="flex flex-wrap items-center gap-2 min-w-0">
+             <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                <Badge className="bg-arc-ink/5 text-arc-ink/40 shrink-0">#{jobId.toString()}</Badge>
                <div className="min-w-0">
                  {Number(status) === 7 ? (
@@ -3519,22 +3657,47 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { key?: stri
                {displayStatus}
              </Badge>
           </div>
+          
+          <div className="space-y-1">
+            <h4 className="font-bold text-sm truncate text-arc-ink group-hover:text-arc-ink transition-colors leading-tight">
+              {parsedMetadata.title}
+            </h4>
+            <p className="text-[11px] text-arc-ink/50 line-clamp-2 leading-relaxed h-[2.5em]">
+              {parsedMetadata.description}
+            </p>
+          </div>
         </div>
-        <div className="font-semibold text-sm truncate group-hover:text-arc-ink transition-colors">{parsedMetadata.title}</div>
+
+        {parsedMetadata.requirements && (
+          <div className="flex flex-wrap gap-1">
+            {parsedMetadata.requirements.split(',').slice(0, 3).map((skill, i) => (
+              <span key={i} className="text-[9px] font-bold text-arc-ink/30 uppercase tracking-tighter">
+                {skill.trim()}{i < 2 && parsedMetadata.requirements.split(',').length > i + 1 ? ' ·' : ''}
+              </span>
+            ))}
+          </div>
+        )}
+
         {Number(status) === 7 && rejectionReasonText && (
           <div className="bg-red-50 p-2 rounded-lg border border-red-100 flex items-start gap-2">
             <AlertTriangle className="w-3 h-3 text-red-500 shrink-0 mt-0.5" />
             <p className="text-[9px] text-red-900 line-clamp-1 italic font-medium">"{rejectionReasonText}"</p>
           </div>
         )}
-        <div className="flex justify-between items-end">
+
+        <div className="flex justify-between items-end pt-1 border-t border-arc-line/40">
            <div className="flex items-center gap-1.5 overflow-hidden">
-             <div className="text-[10px] text-arc-ink/40 font-mono shrink-0">By {(employer as string).slice(0, 6)}</div>
-             <Badge className="bg-arc-ink/5 text-arc-ink/40 border-none px-1.5 py-0 scale-90 origin-left">
-               {empRep.employer.tier} ({empRep.employer.score})
-             </Badge>
+             <div className="text-[10px] text-arc-ink/40 font-bold uppercase tracking-wider shrink-0">By</div>
+             <ActiveWalletIdentity 
+               address={employer} 
+               className="scale-90 origin-left"
+               stats={empRep.employer}
+               mode="summary"
+             />
            </div>
-           <div className="text-sm font-mono font-bold text-arc-ink/80 shrink-0">{Math.floor(Number(formatUnits(amount as bigint, USDC_DECIMALS))).toLocaleString()} USDC</div>
+           <div className="text-sm font-mono font-bold text-arc-ink/80 shrink-0">
+             {Math.floor(Number(formatUnits(amount as bigint, USDC_DECIMALS))).toLocaleString()} USDC
+           </div>
         </div>
       </Card>
     );
@@ -3570,7 +3733,7 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { key?: stri
         </div>
         <div className="text-right">
           <div className="text-2xl font-mono font-bold text-arc-ink">{Math.floor(Number(formatUnits(amount as bigint, USDC_DECIMALS))).toLocaleString()} USDC</div>
-          <div className="text-[10px] text-arc-ink/40 uppercase font-black">{upfrontPercent.toString()}% Upfront Settlement</div>
+          <div className="text-[10px] text-arc-ink/40 uppercase font-black tracking-tight">Standard Escrow Settlement</div>
         </div>
       </div>
 
@@ -3595,25 +3758,21 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { key?: stri
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-arc-paper rounded-2xl border border-arc-line italic">
           <div className="space-y-1">
             <div className="text-[10px] font-bold text-arc-ink/40 uppercase tracking-widest">Employer</div>
-            <div className="text-xs font-mono flex items-center gap-2">
-              <span>{(employer as string).slice(0, 8)}...{(employer as string).slice(-6)}</span>
-              <Badge className="bg-arc-ink text-white">
-                {empRep.employer.tier} ({empRep.employer.score})
-              </Badge>
-            </div>
+            <ActiveWalletIdentity 
+              address={employer} 
+              stats={empRep.employer}
+            />
           </div>
           <div className="space-y-1">
             <div className="text-[10px] font-bold text-arc-ink/40 uppercase tracking-widest">Developer</div>
-            <div className="text-xs font-mono">
-              {developer === zeroAddress ? "NOT ASSIGNED" : (
-                <div className="flex items-center gap-2">
-                  <span>{(developer as string).slice(0, 8)}...{(developer as string).slice(-6)}</span>
-                  <Badge className="bg-arc-ink text-white">
-                    {devRep?.developer.tier} ({devRep?.developer.score})
-                  </Badge>
-                </div>
-              )}
-            </div>
+            {developer === zeroAddress ? (
+              <div className="text-xs font-mono text-arc-ink/40">NOT ASSIGNED</div>
+            ) : (
+              <ActiveWalletIdentity 
+                address={developer} 
+                stats={devRep?.developer}
+              />
+            )}
           </div>
         </div>
 
