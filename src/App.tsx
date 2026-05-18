@@ -1124,30 +1124,30 @@ export default function App() {
         {/* Navigation */}
       <nav className="h-16 border-b border-arc-line flex items-center justify-between px-6 sticky top-0 bg-arc-paper/80 backdrop-blur-xl z-50">
         <div 
-          className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+          className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity whitespace-nowrap shrink-0"
           onClick={() => {
             setShowHomeOverlay(true);
             setSelectedJobId(null);
           }}
         >
-          <div className="w-8 h-8 bg-arc-ink rounded-lg flex items-center justify-center">
+          <div className="w-8 h-8 bg-arc-ink rounded-lg flex items-center justify-center shrink-0">
             <ShieldCheck className="text-white w-5 h-5" />
           </div>
-          <span className="font-semibold tracking-tighter text-xl italic font-serif">ArcProof</span>
+          <span className="hidden sm:inline-block font-semibold tracking-tighter text-xl italic font-serif">ArcProof</span>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 md:gap-4 overflow-x-auto no-scrollbar">
           {isConnected && !showHomeOverlay && (
-            <div className="hidden md:flex bg-arc-ink/5 p-1 rounded-xl">
+            <div className="flex bg-arc-ink/5 p-1 rounded-xl shrink-0">
               <button 
                 onClick={() => setActiveTab('developer')}
-                className={cn("px-4 py-1.5 rounded-lg text-sm font-medium transition-all", activeTab === 'developer' ? "bg-white shadow-sm" : "hover:bg-white/50")}
+                className={cn("px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all whitespace-nowrap", activeTab === 'developer' ? "bg-white shadow-sm" : "hover:bg-white/50")}
               >
                 Developer
               </button>
               <button 
                 onClick={() => setActiveTab('employer')}
-                className={cn("px-4 py-1.5 rounded-lg text-sm font-medium transition-all", activeTab === 'employer' ? "bg-white shadow-sm" : "hover:bg-white/50")}
+                className={cn("px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all whitespace-nowrap", activeTab === 'employer' ? "bg-white shadow-sm" : "hover:bg-white/50")}
               >
                 Employer
               </button>
@@ -1155,47 +1155,47 @@ export default function App() {
           )}
 
           {!isConnected ? (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 md:gap-3 shrink-0">
               <a 
                 href="https://faucet.circle.com/" 
                 target="_blank" 
                 rel="noreferrer"
-                className="text-[10px] font-bold uppercase tracking-widest text-arc-ink/40 hover:text-arc-ink transition-colors flex items-center gap-1"
+                className="hidden sm:flex text-[10px] font-bold uppercase tracking-widest text-arc-ink/40 hover:text-arc-ink transition-colors items-center gap-1 whitespace-nowrap"
               >
                 Faucet <ExternalLink className="w-3 h-3" />
               </a>
-              <Button onClick={() => connect({ connector: connectors[0] })}>
-                <Wallet className="w-4 h-4" />
-                Connect
+              <Button onClick={() => connect({ connector: connectors[0] })} className="whitespace-nowrap text-sm px-4 py-2">
+                <Wallet className="w-4 h-4 mr-1 sm:mr-0" />
+                <span className="sm:inline">Connect</span>
               </Button>
             </div>
           ) : (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               {isConnected && chain?.id !== 5042002 && (
                 <button 
                   onClick={() => switchChain({ chainId: 5042002 })}
-                  className="bg-red-500/10 text-red-500 text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded animate-pulse mr-2 border border-red-500/20 hover:bg-red-500/20 transition-colors cursor-pointer"
+                  className="bg-red-500/10 text-red-500 text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded animate-pulse sm:mr-2 border border-red-500/20 hover:bg-red-500/20 transition-colors cursor-pointer whitespace-nowrap"
                 >
-                  Switch to Arc Testnet
+                  <span className="hidden sm:inline">Switch to </span>Arc Testnet
                 </button>
               )}
-              <div className="flex flex-col items-end mr-2">
+              <div className="hidden sm:flex flex-col items-end mr-2 shrink-0">
                 <span className="text-[10px] font-bold text-arc-ink/40 uppercase tracking-widest">Balance</span>
-                <span className="text-xs font-mono font-medium">
+                <span className="text-xs font-mono font-medium whitespace-nowrap">
                   {usdcBalance ? Math.floor(Number(formatUnits(usdcBalance as bigint, USDC_DECIMALS))).toLocaleString() : "0"} USDC
                 </span>
               </div>
               <button 
                 onClick={() => disconnect()}
-                className="group flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-arc-ink/5 border border-arc-line hover:bg-red-50 hover:border-red-100 transition-all relative overflow-hidden"
+                className="group flex items-center justify-center gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-medium bg-arc-ink/5 border border-arc-line hover:bg-red-50 hover:border-red-100 transition-all relative overflow-hidden shrink-0"
               >
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse group-hover:bg-red-500 group-hover:animate-none" />
-                <span className="transition-all duration-200 group-hover:opacity-0 group-hover:translate-y-[-10px]">
-                  {address?.slice(0, 6)}...{address?.slice(-4)}
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse group-hover:bg-red-500 group-hover:animate-none shrink-0" />
+                <span className="transition-all duration-200 group-hover:opacity-0 group-hover:translate-y-[-10px] whitespace-nowrap">
+                  {address?.slice(0, 4)}...{address?.slice(-4)}
                 </span>
-                <span className="absolute inset-x-0 inset-y-0 flex items-center justify-center gap-2 text-red-600 font-bold uppercase text-[10px] tracking-widest opacity-0 translate-y-[10px] transition-all duration-200 group-hover:opacity-100 group-hover:translate-y-0">
-                  <X className="w-3.5 h-3.5" />
-                  Disconnect
+                <span className="absolute inset-x-0 inset-y-0 flex items-center justify-center gap-1 sm:gap-2 text-red-600 font-bold uppercase text-[10px] tracking-widest opacity-0 translate-y-[10px] transition-all duration-200 group-hover:opacity-100 group-hover:translate-y-0">
+                  <X className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
+                  <span className="hidden sm:inline">Disconnect</span>
                 </span>
               </button>
             </div>
@@ -1220,7 +1220,7 @@ export default function App() {
               <ShieldCheck className="w-12 h-12 opacity-20" />
             </div>
             <div className="space-y-4">
-              <h1 className="text-5xl font-bold tracking-tight">Deterministic Work Settlement Infrastructure</h1>
+              <h1 className="text-4xl md:text-5xl font-bold tracking-tight">Deterministic Work Settlement Infrastructure</h1>
               <p className="text-arc-ink/50 max-w-2xl mx-auto text-lg text-center">
                 Escrow work, verify execution, and settle USDC through programmable onchain state transitions with sub second deterministic finality on Arc
               </p>
@@ -1228,20 +1228,20 @@ export default function App() {
                 Each settlement produces structured behavioral signals that form the foundation for trust and credit systems
               </p>
             </div>
-            <div className="flex flex-col md:flex-row items-center gap-4">
+            <div className="flex flex-col md:flex-row items-center gap-3 md:gap-4 w-full md:w-auto max-w-sm md:max-w-none mx-auto">
               {isConnected ? (
-                <Button onClick={() => setShowHomeOverlay(false)} className="px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg">
+                <Button onClick={() => setShowHomeOverlay(false)} className="w-full md:w-auto px-8 md:px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-base md:text-lg">
                   Launch Dashboard
                 </Button>
               ) : (
-                <Button onClick={() => connect({ connector: connectors[0] })} className="px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg">
+                <Button onClick={() => connect({ connector: connectors[0] })} className="w-full md:w-auto px-8 md:px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-base md:text-lg">
                   Launch Dashboard
                 </Button>
               )}
               <Button 
                 variant="secondary" 
                 onClick={() => setShowHowItWorks(!showHowItWorks)}
-                className="px-12 py-4 rounded-2xl border-arc-line bg-transparent text-arc-ink/60 hover:bg-arc-ink/5 hover:text-arc-ink text-lg"
+                className="w-full md:w-auto px-8 md:px-12 py-4 rounded-2xl border-arc-line bg-transparent text-arc-ink/60 hover:bg-arc-ink/5 hover:text-arc-ink text-base md:text-lg"
               >
                 How ArcProof Works
               </Button>
@@ -1261,92 +1261,92 @@ export default function App() {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                   {/* STEP 01 */}
-                  <div className="glass p-8 rounded-[2rem] border border-arc-line space-y-6 text-left">
+                  <div className="glass p-6 md:p-8 rounded-[2rem] border border-arc-line space-y-6 text-left">
                     <div className="flex items-center justify-between">
-                      <div className="w-12 h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20">
-                         <Github className="w-6 h-6 text-blue-500" />
+                      <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20">
+                         <Github className="w-5 h-5 md:w-6 md:h-6 text-blue-500" />
                       </div>
                       <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.2em]">Step 01</span>
                     </div>
                     <div className="space-y-3">
-                      <h3 className="text-xl font-semibold tracking-tight">Connect Identity</h3>
-                      <p className="text-sm text-arc-ink/60 leading-relaxed">
+                      <h3 className="text-lg md:text-xl font-semibold tracking-tight">Connect Identity</h3>
+                      <p className="text-xs md:text-sm text-arc-ink/60 leading-relaxed">
                         Connect GitHub once during onboarding for identity
                       </p>
-                      <div className="p-3 rounded-xl bg-arc-ink/5 border border-arc-line text-[11px] text-arc-ink/50 italic">
+                      <div className="p-3 rounded-xl bg-arc-ink/5 border border-arc-line text-[10px] md:text-[11px] text-arc-ink/50 italic">
                         ArcProof does NOT use GitHub activity for reputation scoring. Repos, commits, and history never affect protocol reputation
                       </div>
                     </div>
                   </div>
 
                   {/* STEP 02 */}
-                  <div className="glass p-8 rounded-[2rem] border border-arc-line space-y-6 text-left">
+                  <div className="glass p-6 md:p-8 rounded-[2rem] border border-arc-line space-y-6 text-left">
                     <div className="flex items-center justify-between">
-                      <div className="w-12 h-12 rounded-2xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
-                         <ShieldCheck className="w-6 h-6 text-amber-500" />
+                      <div className="w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
+                         <ShieldCheck className="w-5 h-5 md:w-6 md:h-6 text-amber-500" />
                       </div>
                       <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.2em]">Step 02</span>
                     </div>
                     <div className="space-y-3">
-                      <h3 className="text-xl font-semibold tracking-tight">Fund Escrow</h3>
-                      <p className="text-sm text-arc-ink/60 leading-relaxed">
+                      <h3 className="text-lg md:text-xl font-semibold tracking-tight">Fund Escrow</h3>
+                      <p className="text-xs md:text-sm text-arc-ink/60 leading-relaxed">
                         Employers create jobs and lock USDC into onchain escrow before execution begins
                       </p>
-                      <div className="p-3 rounded-xl bg-arc-ink/5 border border-arc-line text-[11px] text-arc-ink/50 italic">
+                      <div className="p-3 rounded-xl bg-arc-ink/5 border border-arc-line text-[10px] md:text-[11px] text-arc-ink/50 italic">
                         Every funded job becomes an immutable lifecycle record tied to protocol settlement events
                       </div>
                     </div>
                   </div>
 
                   {/* STEP 03 */}
-                  <div className="glass p-12 rounded-[3rem] border border-arc-line space-y-8 text-center md:col-span-2 flex flex-col items-center relative overflow-hidden">
+                  <div className="glass p-6 md:p-12 rounded-[2rem] md:rounded-[3rem] border border-arc-line space-y-8 text-center md:col-span-2 flex flex-col items-center relative overflow-hidden">
                     <div className="absolute inset-0 bg-gradient-to-b from-purple-500/[0.02] to-transparent pointer-events-none" />
-                    <div className="flex flex-col items-center gap-4 relative z-10">
-                      <div className="w-16 h-16 rounded-3xl bg-purple-500/10 flex items-center justify-center border border-purple-500/20 shadow-sm shadow-purple-500/5">
-                         <Zap className="w-8 h-8 text-purple-500" />
+                    <div className="flex flex-col items-center gap-2 md:gap-4 relative z-10">
+                      <div className="w-12 h-12 md:w-16 md:h-16 rounded-[1rem] md:rounded-3xl bg-purple-500/10 flex items-center justify-center border border-purple-500/20 shadow-sm shadow-purple-500/5">
+                         <Zap className="w-6 h-6 md:w-8 md:h-8 text-purple-500" />
                       </div>
                       <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.4em]">Step 03</span>
                     </div>
                     <div className="space-y-6 max-w-2xl relative z-10 mx-auto">
-                      <h3 className="text-3xl font-medium tracking-tight text-arc-ink">Execute & Settle</h3>
+                      <h3 className="text-2xl md:text-3xl font-medium tracking-tight text-arc-ink">Execute & Settle</h3>
                       <div className="space-y-3">
-                        <p className="text-base text-arc-ink/60 leading-relaxed">
+                        <p className="text-sm md:text-base text-arc-ink/60 leading-relaxed">
                           Jobs move through a deterministic lifecycle:
                         </p>
-                        <div className="inline-block px-4 py-2 bg-arc-ink/5 rounded-xl border border-arc-line/50">
-                          <code className="text-xs sm:text-sm font-mono tracking-tighter text-arc-ink/80">
+                        <div className="inline-block px-3 md:px-4 py-2 bg-arc-ink/5 rounded-xl border border-arc-line/50">
+                          <code className="text-[10px] sm:text-sm font-mono tracking-tighter text-arc-ink/80 block w-full whitespace-normal">
                             REQUESTED &rarr; ACCEPTED &rarr; COMPLETED &rarr; DISPUTED &rarr; RESOLVED
                           </code>
                         </div>
                       </div>
-                      <p className="text-sm md:text-base text-arc-ink/70 max-w-xl mx-auto">
+                      <p className="text-xs md:text-sm lg:text-base text-arc-ink/70 max-w-xl mx-auto px-4 md:px-0">
                         Settlement outcomes are finalized directly from blockchain events with no manual intervention and no protocol bias.
                       </p>
-                      <div className="text-left bg-white/50 backdrop-blur-sm p-6 md:p-8 rounded-[2rem] border border-arc-line shadow-sm space-y-4 mt-8">
-                        <p className="font-medium text-arc-ink">Each lifecycle outcome produces structured signals:</p>
-                        <ul className="list-disc pl-5 space-y-2 text-sm text-arc-ink/60 marker:text-arc-ink/30">
+                      <div className="text-left bg-white/50 backdrop-blur-sm p-5 md:p-8 rounded-2xl md:rounded-[2rem] border border-arc-line shadow-sm space-y-4 mt-6 md:mt-8">
+                        <p className="font-medium text-arc-ink text-sm md:text-base">Each lifecycle outcome produces structured signals:</p>
+                        <ul className="list-disc pl-5 space-y-2 text-xs md:text-sm text-arc-ink/60 marker:text-arc-ink/30">
                           <li>verified execution history under escrow conditions</li>
                           <li>settlement reliability across counterparties</li>
                           <li>dispute behavior and resolution outcomes</li>
                           <li>interaction graph of economic trust between participants</li>
                         </ul>
                         <div className="pt-4 border-t border-arc-line">
-                          <p className="text-sm font-medium italic text-arc-ink/40">These signals are recorded as part of protocol state and persist across work relationships.</p>
+                          <p className="text-xs md:text-sm font-medium italic text-arc-ink/40">These signals are recorded as part of protocol state and persist across work relationships.</p>
                         </div>
                       </div>
                     </div>
                   </div>
 
                   {/* STEP 04 */}
-                  <div className="glass p-8 rounded-[3rem] border border-arc-line space-y-8 text-left relative overflow-hidden group col-span-1 md:col-span-2">
-                    <div className="absolute -right-24 -bottom-24 w-64 h-64 bg-emerald-500/5 rounded-full blur-[100px] group-hover:bg-emerald-500/10 transition-all duration-700" />
-                    <div className="absolute -left-24 -top-24 w-64 h-64 bg-amber-500/5 rounded-full blur-[100px] group-hover:bg-amber-500/10 transition-all duration-700" />
+                  <div className="glass p-6 md:p-8 rounded-[2rem] md:rounded-[3rem] border border-arc-line space-y-6 md:space-y-8 text-left relative overflow-hidden group col-span-1 md:col-span-2">
+                    <div className="absolute -right-24 -bottom-24 w-40 h-40 md:w-64 md:h-64 bg-emerald-500/5 rounded-full blur-[80px] md:blur-[100px] group-hover:bg-emerald-500/10 transition-all duration-700" />
+                    <div className="absolute -left-24 -top-24 w-40 h-40 md:w-64 md:h-64 bg-amber-500/5 rounded-full blur-[80px] md:blur-[100px] group-hover:bg-amber-500/10 transition-all duration-700" />
                     
                     <div className="flex items-center justify-between relative z-10">
-                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 flex items-center justify-center border border-emerald-500/20 shadow-sm">
-                         <Trophy className="w-7 h-7 text-emerald-500" />
+                      <div className="w-10 h-10 md:w-14 md:h-14 rounded-[1rem] md:rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 flex items-center justify-center border border-emerald-500/20 shadow-sm">
+                         <Trophy className="w-5 h-5 md:w-7 md:h-7 text-emerald-500" />
                       </div>
                       <div className="flex flex-col items-end">
                         <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.3em]">Step 04</span>
