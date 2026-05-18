@@ -277,6 +277,8 @@ const AppContext = React.createContext<{
   };
   allDerivedStats: Record<string, { developer: any; employer: any }>;
   isReinitializing: boolean;
+  resolutionHistory: Record<string, { winner: 'dev' | 'emp' }>;
+  disputedJobs: Record<string, bigint>;
 } | null>(null);
 
 function useAppContext() {
@@ -330,6 +332,27 @@ function GlobalAlertModal({ config, onClose }: { config: AlertConfig, onClose: (
 }
 
 // --- Main Application ---
+
+// --- Error Boundary ---
+
+class ErrorBoundary extends React.Component<any, any> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("App Crash:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (this as any).props.fallback;
+    }
+    return (this as any).props.children;
+  }
+}
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -390,27 +413,42 @@ export default function App() {
     }
   }, [jobCount]);
 
-  const { data: jobsRawData, refetch: refetchJobsRaw } = useReadContracts({
-    contracts: allJobs.map(id => ({
-      address: JOB_ESCROW_ADDRESS,
-      abi: JOB_ESCROW_ABI,
-      functionName: 'jobs',
-      args: [id],
-    })),
+  const { data: batchRawData, refetch: refetchJobsRaw } = useReadContracts({
+    contracts: allJobs.flatMap(id => [
+      {
+        address: JOB_ESCROW_ADDRESS,
+        abi: JOB_ESCROW_ABI,
+        functionName: 'jobs',
+        args: [id],
+      },
+      {
+        address: JOB_ESCROW_ADDRESS,
+        abi: JOB_ESCROW_ABI,
+        functionName: 'disputeTimestamps',
+        args: [id],
+      }
+    ]),
     query: { enabled: allJobs.length > 0 }
   });
 
-  const jobsData = useMemo(() => {
-    const map: Record<string, any> = {};
-    if (!jobsRawData) return map;
+  const { jobsData, disputedJobs } = useMemo(() => {
+    const jMap: Record<string, any> = {};
+    const dMap: Record<string, bigint> = {};
+    if (!batchRawData) return { jobsData: jMap, disputedJobs: dMap };
+    
     allJobs.forEach((id, index) => {
-      const res = jobsRawData[index];
-      if (res.status === 'success' && res.result) {
-        map[id.toString()] = res.result;
+      const jobRes = batchRawData[index * 2];
+      const disputeRes = batchRawData[index * 2 + 1];
+      
+      if (jobRes && jobRes.status === 'success' && jobRes.result) {
+        jMap[id.toString()] = jobRes.result;
+      }
+      if (disputeRes && disputeRes.status === 'success' && disputeRes.result) {
+        dMap[id.toString()] = disputeRes.result as bigint;
       }
     });
-    return map;
-  }, [jobsRawData, allJobs]);
+    return { jobsData: jMap, disputedJobs: dMap };
+  }, [batchRawData, allJobs]);
 
   const handleAlert = useCallback((config: AlertConfig) => {
     setAlertConfig(config);
@@ -423,40 +461,48 @@ export default function App() {
   }, [refetchJobCount, refetchJobsRaw, queryClient]);
 
   // Sync Job Identities from events
+  const lastIdentitiesSyncBlock = useRef<bigint>(0n);
   useEffect(() => {
     async function syncJobIdentities() {
       if (!publicClient) return;
       try {
         const currentBlock = await publicClient.getBlockNumber();
-        const CHUNK_SIZE = 5000n;
-        const deploymentBlock = 0n; // Use deployment block in production
+        const CHUNK_SIZE = 10000n;
+        const deploymentBlock = 0n; 
+        const startBlock = lastIdentitiesSyncBlock.current > 0n ? lastIdentitiesSyncBlock.current + 1n : deploymentBlock;
+
+        if (startBlock > currentBlock) return;
         
         const mapping: Record<string, { employer: string, developer: string }> = {};
 
-        for (let i = deploymentBlock; i < currentBlock; i += CHUNK_SIZE) {
+        for (let i = startBlock; i < currentBlock; i += CHUNK_SIZE) {
           const toBlock = i + CHUNK_SIZE - 1n > currentBlock ? currentBlock : i + CHUNK_SIZE - 1n;
-          const logs = await publicClient.getLogs({
-            address: JOB_ESCROW_ADDRESS,
-            event: {
-              type: 'event',
-              name: 'JobCreated',
-              inputs: [
-                { type: 'uint256', name: 'jobId', indexed: true },
-                { type: 'address', name: 'employer', indexed: true },
-                { type: 'address', name: 'developer', indexed: true },
-                { type: 'uint256', name: 'amount' },
-                { type: 'uint256', name: 'upfrontPercent' }
-              ]
-            },
-            fromBlock: i,
-            toBlock: toBlock
-          });
+          try {
+            const rawLogs = await publicClient.getLogs({
+              address: JOB_ESCROW_ADDRESS,
+              fromBlock: i,
+              toBlock: toBlock
+            });
 
-          logs.forEach(log => {
-            const { jobId, employer, developer } = log.args as any;
-            mapping[jobId.toString()] = { employer, developer };
-          });
+            const logs = parseEventLogs({
+              abi: JOB_ESCROW_ABI,
+              eventName: 'JobCreated',
+              logs: rawLogs
+            });
+
+            logs.forEach(log => {
+              if (log.args && 'jobId' in log.args) {
+                const { jobId, employer, developer } = log.args as any;
+                if (jobId !== undefined) {
+                  mapping[BigInt(jobId).toString()] = { employer, developer };
+                }
+              }
+            });
+          } catch (e) {
+            console.warn("JobCreated log chunk fetch failed", e);
+          }
         }
+        lastIdentitiesSyncBlock.current = currentBlock;
         setJobIdentities(prev => ({ ...prev, ...mapping }));
       } catch (err) {
         console.error("Failed to sync job identities from events", err);
@@ -473,7 +519,9 @@ export default function App() {
       const mapping: Record<string, { employer: string, developer: string }> = {};
       logs.forEach(log => {
         const { jobId, employer, developer } = log.args as any;
-        mapping[jobId.toString()] = { employer, developer };
+        if (jobId !== undefined) {
+          mapping[BigInt(jobId).toString()] = { employer, developer };
+        }
       });
       setJobIdentities(prev => ({ ...prev, ...mapping }));
       refetchJobs();
@@ -721,55 +769,69 @@ export default function App() {
   const [resolutionHistory, setResolutionHistory] = useState<Record<string, { winner: 'dev' | 'emp' }>>({});
   const [isReinitializing, setIsReinitializing] = useState(false);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
+  const [showHomeOverlay, setShowHomeOverlay] = useState(false);
   const prevAddress = useRef(address);
 
   useEffect(() => {
-    if (address !== prevAddress.current) {
+    if (address && address !== prevAddress.current) {
       setIsReinitializing(true);
       prevAddress.current = address;
-      setTimeout(() => setIsReinitializing(false), 1000);
+      const timer = setTimeout(() => setIsReinitializing(false), 800);
+      return () => clearTimeout(timer);
+    }
+    if (!address) {
+      prevAddress.current = undefined;
     }
   }, [address]);
 
   // Historical Event Indexer (Deterministic)
+  const lastDisputeSyncBlock = useRef<bigint>(0n);
   useEffect(() => {
     if (!publicClient || !address) return;
     
     const fetchDisputeHistory = async () => {
       try {
         const currentBlock = await publicClient.getBlockNumber();
-        const CHUNK_SIZE = 5000n;
-        const deploymentBlock = 0n; // Ideally set to contract deployment block
+        const CHUNK_SIZE = 10000n;
+        const deploymentBlock = 0n; 
+        const startBlock = lastDisputeSyncBlock.current > 0n ? lastDisputeSyncBlock.current + 1n : deploymentBlock;
         
+        if (startBlock > currentBlock) return;
+
         let history: Record<string, { winner: 'dev' | 'emp' }> = {};
         
         // Fetch in chunks to avoid RPC limits
-        for (let i = deploymentBlock; i < currentBlock; i += CHUNK_SIZE) {
+        for (let i = startBlock; i < currentBlock; i += CHUNK_SIZE) {
           const toBlock = i + CHUNK_SIZE - 1n > currentBlock ? currentBlock : i + CHUNK_SIZE - 1n;
-          const logs = await publicClient.getLogs({
-            address: JOB_ESCROW_ADDRESS,
-            event: {
-              type: 'event',
-              name: 'DisputeResolved',
-              inputs: [
-                { type: 'uint256', name: 'jobId', indexed: true },
-                { type: 'bool', name: 'favorDeveloper' }
-              ]
-            },
-            fromBlock: i,
-            toBlock: toBlock
-          });
+          try {
+            const rawLogs = await publicClient.getLogs({
+              address: JOB_ESCROW_ADDRESS,
+              fromBlock: i,
+              toBlock: toBlock
+            });
 
-          logs.forEach(log => {
-            if (log.args && log.args.jobId !== undefined) {
-               history[log.args.jobId.toString()] = { 
-                 winner: log.args.favorDeveloper ? 'dev' : 'emp' 
-               };
-            }
-          });
+            const logs = parseEventLogs({
+              abi: JOB_ESCROW_ABI,
+              eventName: 'DisputeResolved',
+              logs: rawLogs
+            });
+
+            logs.forEach(log => {
+              if (log.args && 'jobId' in log.args) {
+                 const { jobId, favorDeveloper } = log.args as any;
+                 if (jobId !== undefined) {
+                    history[BigInt(jobId).toString()] = { 
+                      winner: favorDeveloper ? 'dev' : 'emp' 
+                    };
+                 }
+              }
+            });
+          } catch (e) {
+            console.warn("Dispute history chunk fetch failed", e);
+          }
         }
-        
-        setResolutionHistory(history);
+        lastDisputeSyncBlock.current = currentBlock;
+        setResolutionHistory(prev => ({ ...prev, ...history }));
       } catch (err) {
         console.error("Dispute history sync failed:", err);
       }
@@ -787,7 +849,7 @@ export default function App() {
       logs.forEach(log => {
         const { jobId, favorDeveloper } = log.args as any;
         if (jobId !== undefined) {
-          mapping[jobId.toString()] = { winner: favorDeveloper ? 'dev' : 'emp' };
+          mapping[BigInt(jobId).toString()] = { winner: favorDeveloper ? 'dev' : 'emp' };
         }
       });
       setResolutionHistory(prev => ({ ...prev, ...mapping }));
@@ -801,6 +863,8 @@ export default function App() {
       // Clear event-driven local states
       setJobIdentities({});
       setResolutionHistory({});
+      lastIdentitiesSyncBlock.current = 0n;
+      lastDisputeSyncBlock.current = 0n;
       
       // Trigger full refetch
       refetchJobs();
@@ -815,7 +879,7 @@ export default function App() {
 
     const getInitialStats = () => ({
       developer: {
-        completed: 0, failed: 0, earned: 0n, disputesWon: 0, disputesLost: 0, active: 0, totalJobs: 0,
+        completed: 0, failed: 0, earned: 0n, disputes: 0, disputesWon: 0, disputesLost: 0, active: 0, totalJobs: 0,
         score: 0, tier: 'Unrated', completionRate: 0, disputePerformance: 0, earningsStability: 0, rated: false
       },
       employer: {
@@ -828,30 +892,43 @@ export default function App() {
       const jobArray = job as any[];
       if (!jobArray || jobArray.length < 6) return;
 
-      const employerAddr = (jobArray[0] || "").toString().toLowerCase();
-      const developerAddr = (jobArray[1] || "").toString().toLowerCase();
-      
-      if (employerAddr && employerAddr !== zeroAddress) {
-        if (!statsMap[employerAddr]) statsMap[employerAddr] = getInitialStats();
-        const emp = statsMap[employerAddr].employer;
+        const employerAddr = (jobArray[0] || "").toString().toLowerCase();
+        const developerAddr = (jobArray[1] || "").toString().toLowerCase();
+        
+        const jobIdKey = id.toString();
+        const disputedAt = disputedJobs[jobIdKey] || 0n;
         const status = Number(jobArray[5]);
         const amount = BigInt(jobArray[2] || 0n);
-        const res = resolutionHistory[id];
+        let res = resolutionHistory[jobIdKey];
+        const isDisputed = disputedAt > 0n || status === 5 || !!res;
 
-        emp.funded++;
-        
-        // Deterministic Outcome Tracking
-        if (res) {
-          emp.disputes++;
-          if (res.winner === 'emp') {
-            emp.disputesWon++;
-          } else {
-            emp.disputesLost++;
+        if (employerAddr && employerAddr !== zeroAddress) {
+          if (!statsMap[employerAddr]) statsMap[employerAddr] = getInitialStats();
+          const emp = statsMap[employerAddr].employer;
+          const amount = BigInt(jobArray[2] || 0n);
+          let res = resolutionHistory[jobIdKey];
+
+          // Heuristic Fallback for missing/slow logs
+          if (!res && isDisputed) {
+             if (status === 4) res = { winner: 'dev' };
+             if (status === 7 || status === 6) res = { winner: 'emp' };
           }
-        }
+
+          emp.funded++;
+          
+          if (isDisputed) {
+            emp.disputes++;
+            if (res) {
+              if (res.winner === 'emp') {
+                emp.disputesWon++;
+              } else {
+                emp.disputesLost++;
+              }
+            }
+          }
 
         // New Deterministic Lifecycle Logic
-        const empFailed = (status === 7 || status === 6 || (res && res.winner === 'emp'));
+        const empFailed = (status === 6 || status === 7 || (res && res.winner === 'emp'));
         const empCompleted = (status === 4 || (res && res.winner === 'dev'));
         const empActive = !res && (status === 2 || status === 3 || status === 5 || status === 8);
         const empOpen = !res && (status === 0 || status === 1);
@@ -868,14 +945,31 @@ export default function App() {
       if (developerAddr && developerAddr !== zeroAddress && developerAddr !== employerAddr) {
         if (!statsMap[developerAddr]) statsMap[developerAddr] = getInitialStats();
         const dev = statsMap[developerAddr].developer;
-        const status = Number(jobArray[5]);
         const amount = BigInt(jobArray[2] || 0n);
-        const res = resolutionHistory[id];
+        let res = resolutionHistory[jobIdKey];
+        const isDisputed = disputedAt > 0n || status === 5 || !!res;
+
+        // Heuristic Fallback
+        if (!res && isDisputed) {
+           if (status === 4) res = { winner: 'dev' };
+           if (status === 7 || status === 6) res = { winner: 'emp' };
+        }
 
         dev.totalJobs++;
 
+        if (isDisputed) {
+          dev.disputes++;
+          if (res) {
+            if (res.winner === 'dev') {
+              dev.disputesWon++;
+            } else {
+              dev.disputesLost++;
+            }
+          }
+        }
+
         // New Deterministic Lifecycle Logic
-        const devFailed = res && res.winner === 'emp'; 
+        const devFailed = (status === 6 || status === 7 || (res && res.winner === 'emp')); 
         const devCompleted = (status === 4 || (res && res.winner === 'dev'));
         const devActive = !res && (status === 2 || status === 3 || status === 5 || status === 8);
 
@@ -885,14 +979,6 @@ export default function App() {
         }
         if (devActive) dev.active++;
         if (devFailed) dev.failed++;
-
-        if (res) {
-          if (res.winner === 'emp') {
-            dev.disputesLost++;
-          } else {
-            dev.disputesWon++;
-          }
-        }
       }
     });
 
@@ -911,7 +997,7 @@ export default function App() {
         dev.disputePerformance = 0;
         dev.earningsStability = 0;
       } else {
-        const devCR = (dev.completed + dev.disputesWon) / devT;
+        const devCR = dev.completed / devT;
         const devDisputesTotal = dev.disputesWon + dev.disputesLost;
         const devDP = devDisputesTotal > 0 ? dev.disputesWon / devDisputesTotal : 1;
         const devE = Number(formatUnits(dev.earned, USDC_DECIMALS));
@@ -975,11 +1061,11 @@ export default function App() {
   const derivedStats = useMemo(() => {
     const defaultStats = {
       developer: {
-        completed: 0, failed: 0, earned: 0n, disputesWon: 0, disputesLost: 0, active: 0, totalJobs: 0,
+        completed: 0, failed: 0, earned: 0n, disputes: 0, disputesWon: 0, disputesLost: 0, active: 0, totalJobs: 0,
         score: 0, tier: 'Unrated', completionRate: 0, disputePerformance: 0, earningsStability: 0, rated: false
       },
       employer: {
-        funded: 0, completed: 0, cancelled: 0, disputes: 0, disputesWon: 0, disputesLost: 0, paid: 0n, active: 0,
+        funded: 0, open: 0, completed: 0, failed: 0, disputes: 0, disputesWon: 0, disputesLost: 0, paid: 0n, active: 0,
         score: 0, tier: 'Unrated', fundingEfficiency: 0, fairnessIndex: 100, disputeQuality: 0, escrowStability: 0, rated: false
       }
     };
@@ -999,10 +1085,18 @@ export default function App() {
     derivedStats,
     allDerivedStats,
     isReinitializing,
-    resolutionHistory
-  }), [interactionState, handleAlert, jobsData, jobIdentities, allJobs, refetchJobs, derivedStats, allDerivedStats, isReinitializing, resolutionHistory]);
+    resolutionHistory,
+    disputedJobs
+  }), [interactionState, handleAlert, jobsData, jobIdentities, allJobs, refetchJobs, derivedStats, allDerivedStats, isReinitializing, resolutionHistory, disputedJobs]);
 
   return (
+    <ErrorBoundary fallback={<div className="h-screen flex items-center justify-center p-6 text-center space-y-4">
+      <div className="space-y-2">
+        <h2 className="text-2xl font-bold">Something went wrong</h2>
+        <p className="text-arc-ink/50">The application encountered a rendering error during pocket/identity switching.</p>
+        <Button onClick={() => window.location.reload()}>Reload Infrastructure</Button>
+      </div>
+    </div>}>
     <AppContext.Provider value={contextValue}>
       <AnimatePresence>
         {isReinitializing && (
@@ -1010,16 +1104,16 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-arc-paper/90 backdrop-blur-md flex flex-col items-center justify-center"
+            className="fixed inset-0 z-[100] bg-arc-paper/80 backdrop-blur-md flex flex-col items-center justify-center"
           >
-            <div className="flex flex-col items-center gap-6">
+            <div className="space-y-6 text-center">
               <div className="relative">
-                <div className="w-16 h-16 rounded-full border-4 border-arc-ink/10 border-t-arc-ink animate-spin" />
-                <ShieldCheck className="absolute inset-0 m-auto w-6 h-6 text-arc-ink animate-pulse" />
+                <div className="absolute inset-0 animate-ping bg-arc-ink/5 rounded-full" />
+                <Loader2 className="w-12 h-12 animate-spin text-arc-ink/20 relative z-10 mx-auto" />
               </div>
-              <div className="text-center space-y-2">
-                <h3 className="font-serif italic text-2xl text-arc-ink">Reinitializing Protocol</h3>
-                <p className="text-arc-ink/40 font-mono text-xs uppercase tracking-widest">Residuing event history ...</p>
+              <div className="space-y-2">
+                <h3 className="text-2xl font-bold tracking-tight text-arc-ink">Switching Identity</h3>
+                <p className="text-arc-ink/40 text-sm font-mono uppercase tracking-[0.2em]">Synchronizing protocol state...</p>
               </div>
             </div>
           </motion.div>
@@ -1029,7 +1123,13 @@ export default function App() {
         {alertConfig && <GlobalAlertModal config={alertConfig} onClose={() => setAlertConfig(null)} />}
         {/* Navigation */}
       <nav className="h-16 border-b border-arc-line flex items-center justify-between px-6 sticky top-0 bg-arc-paper/80 backdrop-blur-xl z-50">
-        <div className="flex items-center gap-2">
+        <div 
+          className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+          onClick={() => {
+            setShowHomeOverlay(true);
+            setSelectedJobId(null);
+          }}
+        >
           <div className="w-8 h-8 bg-arc-ink rounded-lg flex items-center justify-center">
             <ShieldCheck className="text-white w-5 h-5" />
           </div>
@@ -1037,7 +1137,7 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-4">
-          {isConnected && (
+          {isConnected && !showHomeOverlay && (
             <div className="hidden md:flex bg-arc-ink/5 p-1 rounded-xl">
               <button 
                 onClick={() => setActiveTab('developer')}
@@ -1106,8 +1206,16 @@ export default function App() {
       <main className="flex-1 max-w-7xl mx-auto w-full p-6 md:p-8 space-y-8">
         
         {/* Connection Check */}
-        {!isConnected ? (
-          <div className={cn("flex flex-col items-center justify-center text-center space-y-8 py-12 md:py-20", showHowItWorks ? "min-h-screen" : "h-[70vh]")}>
+        <AnimatePresence mode="wait">
+          {!isConnected || showHomeOverlay ? (
+            <motion.div 
+              key="landing"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex-1 flex flex-col items-center"
+            >
+              <div className={cn("flex flex-col items-center justify-center text-center space-y-8 py-12 md:py-20", showHowItWorks ? "min-h-screen" : "h-[70vh]")}>
             <div className="w-24 h-24 bg-arc-ink/[0.03] rounded-full flex items-center justify-center border border-arc-line shadow-inner">
               <ShieldCheck className="w-12 h-12 opacity-20" />
             </div>
@@ -1116,11 +1224,20 @@ export default function App() {
               <p className="text-arc-ink/50 max-w-2xl mx-auto text-lg text-center">
                 Escrow work, verify execution, and settle USDC through programmable onchain state transitions with sub second deterministic finality on Arc
               </p>
+              <p className="text-arc-ink/50 max-w-2xl mx-auto text-lg text-center">
+                Each settlement produces structured behavioral signals that form the foundation for trust and credit systems
+              </p>
             </div>
             <div className="flex flex-col md:flex-row items-center gap-4">
-              <Button onClick={() => connect({ connector: connectors[0] })} className="px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg">
-                Launch Dashboard
-              </Button>
+              {isConnected ? (
+                <Button onClick={() => setShowHomeOverlay(false)} className="px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg">
+                  Launch Dashboard
+                </Button>
+              ) : (
+                <Button onClick={() => connect({ connector: connectors[0] })} className="px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg">
+                  Launch Dashboard
+                </Button>
+              )}
               <Button 
                 variant="secondary" 
                 onClick={() => setShowHowItWorks(!showHowItWorks)}
@@ -1140,7 +1257,7 @@ export default function App() {
                 <div className="text-center space-y-4">
                   <h2 className="text-3xl font-bold tracking-tight">How ArcProof Works</h2>
                   <p className="text-arc-ink/50 max-w-2xl mx-auto">
-                    Deterministic escrow settlement and reputation infrastructure powered by on-chain lifecycle events.
+                    Deterministic escrow settlement and reputation infrastructure powered by onchain lifecycle events
                   </p>
                 </div>
 
@@ -1156,10 +1273,10 @@ export default function App() {
                     <div className="space-y-3">
                       <h3 className="text-xl font-semibold tracking-tight">Connect Identity</h3>
                       <p className="text-sm text-arc-ink/60 leading-relaxed">
-                        Connect GitHub once during onboarding for identity and developer context.
+                        Connect GitHub once during onboarding for identity
                       </p>
                       <div className="p-3 rounded-xl bg-arc-ink/5 border border-arc-line text-[11px] text-arc-ink/50 italic">
-                        ArcProof does NOT use GitHub activity for reputation scoring. Repos, commits, and history never affect protocol reputation.
+                        ArcProof does NOT use GitHub activity for reputation scoring. Repos, commits, and history never affect protocol reputation
                       </div>
                     </div>
                   </div>
@@ -1175,10 +1292,10 @@ export default function App() {
                     <div className="space-y-3">
                       <h3 className="text-xl font-semibold tracking-tight">Fund Escrow</h3>
                       <p className="text-sm text-arc-ink/60 leading-relaxed">
-                        Employers create jobs and lock USDC into on-chain escrow before execution begins.
+                        Employers create jobs and lock USDC into onchain escrow before execution begins
                       </p>
                       <div className="p-3 rounded-xl bg-arc-ink/5 border border-arc-line text-[11px] text-arc-ink/50 italic">
-                        Every funded job becomes an immutable lifecycle record tied to protocol settlement events.
+                        Every funded job becomes an immutable lifecycle record tied to protocol settlement events
                       </div>
                     </div>
                   </div>
@@ -1192,13 +1309,32 @@ export default function App() {
                       </div>
                       <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.4em]">Step 03</span>
                     </div>
-                    <div className="space-y-6 max-w-2xl relative z-10">
+                    <div className="space-y-6 max-w-2xl relative z-10 mx-auto">
                       <h3 className="text-3xl font-medium tracking-tight text-arc-ink">Execute & Settle</h3>
-                      <p className="text-base text-arc-ink/50 leading-relaxed font-sans font-normal">
-                        Jobs move through a deterministic lifecycle: REQUESTED → ACCEPTED → COMPLETED → DISPUTED → RESOLVED.
+                      <div className="space-y-3">
+                        <p className="text-base text-arc-ink/60 leading-relaxed">
+                          Jobs move through a deterministic lifecycle:
+                        </p>
+                        <div className="inline-block px-4 py-2 bg-arc-ink/5 rounded-xl border border-arc-line/50">
+                          <code className="text-xs sm:text-sm font-mono tracking-tighter text-arc-ink/80">
+                            REQUESTED &rarr; ACCEPTED &rarr; COMPLETED &rarr; DISPUTED &rarr; RESOLVED
+                          </code>
+                        </div>
+                      </div>
+                      <p className="text-sm md:text-base text-arc-ink/70 max-w-xl mx-auto">
+                        Settlement outcomes are finalized directly from blockchain events with no manual intervention and no protocol bias.
                       </p>
-                      <div className="p-6 rounded-[2rem] bg-arc-ink/[0.03] border border-arc-line text-sm text-arc-ink/60 italic font-sans font-normal">
-                        Settlement outcomes are finalized directly from blockchain events. No manual intervention, no protocol bias.
+                      <div className="text-left bg-white/50 backdrop-blur-sm p-6 md:p-8 rounded-[2rem] border border-arc-line shadow-sm space-y-4 mt-8">
+                        <p className="font-medium text-arc-ink">Each lifecycle outcome produces structured signals:</p>
+                        <ul className="list-disc pl-5 space-y-2 text-sm text-arc-ink/60 marker:text-arc-ink/30">
+                          <li>verified execution history under escrow conditions</li>
+                          <li>settlement reliability across counterparties</li>
+                          <li>dispute behavior and resolution outcomes</li>
+                          <li>interaction graph of economic trust between participants</li>
+                        </ul>
+                        <div className="pt-4 border-t border-arc-line">
+                          <p className="text-sm font-medium italic text-arc-ink/40">These signals are recorded as part of protocol state and persist across work relationships.</p>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1213,7 +1349,7 @@ export default function App() {
                          <Trophy className="w-7 h-7 text-emerald-500" />
                       </div>
                       <div className="flex flex-col items-end">
-                        <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.3em]">Phase 04</span>
+                        <span className="text-[10px] font-bold text-arc-ink/20 uppercase tracking-[0.3em]">Step 04</span>
                         <span className="text-[10px] font-bold text-emerald-500/60 uppercase">Reputation Mining</span>
                       </div>
                     </div>
@@ -1222,7 +1358,7 @@ export default function App() {
                       <div className="space-y-2">
                         <h3 className="text-2xl font-bold tracking-tight text-arc-ink">Build Protocol Reputation</h3>
                         <p className="text-sm text-arc-ink/50 leading-relaxed max-w-2xl">
-                          Your reputation is a deterministic soulbound projection of your on-chain behavior. No manual intervention, no social bias—only execution history.
+                          Your reputation is a deterministic soulbound projection of your onchain behavior. No manual intervention, no social bias (only execution history)
                         </p>
                       </div>
 
@@ -1287,24 +1423,29 @@ export default function App() {
                     <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-1" />
                     Back to Home
                   </button>
-                  <div className="w-px h-6 bg-arc-line hidden md:block" />
-                  <Button 
-                    onClick={() => connect({ connector: connectors[0] })}
-                    className="px-16 py-6 rounded-2xl shadow-2xl shadow-arc-ink/20 text-lg flex items-center gap-3 transition-transform hover:scale-105 active:scale-95"
-                  >
-                    <Wallet className="w-5 h-5" />
-                    Enter Protocol Dashboard
-                  </Button>
                 </div>
               </motion.div>
             )}
           </div>
-        ) : !address ? (
-          <div className="h-[70vh] flex items-center justify-center">
-            <Loader2 className="w-8 h-8 animate-spin text-arc-ink/20" />
-          </div>
-        ) : (
-          <>
+        </motion.div>
+      ) : !address ? (
+              <motion.div 
+                key="loading-identity"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="h-[70vh] flex items-center justify-center w-full"
+              >
+                <Loader2 className="w-8 h-8 animate-spin text-arc-ink/20" />
+              </motion.div>
+            ) : (
+              <motion.div
+                key={`app-${address}`}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-8 flex-1 w-full"
+              >
             {/* Hero Section */}
             <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
               <div className="space-y-2">
@@ -1517,35 +1658,6 @@ export default function App() {
               {/* Main Panel */}
               <div className="lg:col-span-2 space-y-8">
                 
-                {/* Execution Integrity Overview */}
-                <div className="grid grid-cols-1 gap-4">
-                  <Card className="flex flex-col justify-between p-6 bg-arc-paper border-arc-line">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <div className="text-[11px] uppercase tracking-widest text-arc-ink/40 font-bold mb-1">Reputation Tier</div>
-                        <div className="text-4xl font-serif italic text-arc-ink/80 mb-6">
-                          {activeTab === 'developer' ? derivedStats.developer.tier : derivedStats.employer.tier}
-                        </div>
-                        <div className="pt-4 border-t border-arc-line flex items-baseline gap-4">
-                           <div className="flex items-center gap-2">
-                             <span className="text-[10px] text-arc-ink/40 font-bold uppercase tracking-[0.2em]">Score</span>
-                             <span className="text-arc-ink/20 font-mono text-xs">=&gt;</span>
-                           </div>
-                           <span className="text-4xl font-mono text-arc-ink font-light tracking-tighter">
-                             {activeTab === 'developer' ? derivedStats.developer.score : derivedStats.employer.score}
-                           </span>
-                        </div>
-                      </div>
-                      <div className="bg-arc-ink/5 p-3 rounded-2xl">
-                        <ShieldCheck className="w-8 h-8 text-arc-ink/40" />
-                      </div>
-                    </div>
-                    <div className="mt-8 flex items-center gap-2 text-emerald-600">
-                      <CircleCheck className="w-4 h-4" />
-                      <span className="text-[11px] font-mono uppercase tracking-tight font-bold">Execution Verified</span>
-                    </div>
-                  </Card>
-                </div>
 
                 {/* Tab Content */}
                 <AnimatePresence mode="wait">
@@ -1585,8 +1697,10 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="space-y-8"
+                      className="space-y-10"
                     >
+                      <EmployerProfile address={address!} onSelect={setSelectedJobId} />
+
                       <div className="flex items-center gap-2 border-b border-arc-line pb-4 overflow-x-auto no-scrollbar">
                         <button 
                           onClick={() => setEmployerTab('initialize')}
@@ -1646,7 +1760,6 @@ export default function App() {
                             exit={{ opacity: 0, scale: 0.98 }}
                             className="space-y-8"
                           >
-                             <EmployerProfile address={address!} onSelect={setSelectedJobId} />
                              <JobExplorer address={address!} role="employer" onSelect={setSelectedJobId} />
                           </motion.div>
                         )}
@@ -1726,9 +1839,9 @@ export default function App() {
                 )}
               </div>
             </section>
-          </>
+          </motion.div>
         )}
-      </main>
+      </AnimatePresence>
 
       {/* Success Modal / Progress Modal */}
       <AnimatePresence>
@@ -1864,6 +1977,7 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+    </main>
 
       <footer className="mt-12 border-t border-arc-line p-12 bg-white/50 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8 opacity-40">
@@ -1889,6 +2003,7 @@ export default function App() {
       </footer>
       </div>
     </AppContext.Provider>
+    </ErrorBoundary>
   );
 }
 
@@ -2431,13 +2546,6 @@ function EmployerProfile({ address, onSelect }: { address: `0x${string}`, onSele
     setTimeout(() => setIsRefreshing(false), 1000);
   };
 
-  const signals = {
-    fundingEfficiency: profile.fundingEfficiency,
-    fairnessIndex: profile.fairnessIndex,
-    disputeQuality: profile.disputeQuality,
-    escrowStability: profile.escrowStability
-  };
-
   return (
     <div className="space-y-10">
       <div className={cn("space-y-6 transition-opacity", !profile.rated && "opacity-60")}>
@@ -2481,38 +2589,7 @@ function EmployerProfile({ address, onSelect }: { address: `0x${string}`, onSele
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-          <SignalBar 
-            label="Funding Efficiency" 
-            score={signals.fundingEfficiency} 
-            colorClass="bg-blue-500" 
-          />
-          <SignalBar 
-            label="Fairness Index" 
-            score={signals.fairnessIndex} 
-            colorClass="bg-emerald-500" 
-          />
-          <SignalBar 
-            label="Dispute Quality" 
-            score={signals.disputeQuality} 
-            colorClass="bg-purple-500" 
-          />
-          <SignalBar 
-            label="Escrow Stability" 
-            score={signals.escrowStability} 
-            colorClass="bg-amber-500" 
-          />
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 pt-2">
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Open Jobs</div>
-             <div className="text-xl font-mono">{profile.open}</div>
-          </div>
-          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
-             <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Active Jobs</div>
-             <div className="text-xl font-mono">{profile.active}</div>
-          </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 pt-2">
           <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Completed Jobs</div>
              <div className="text-xl font-mono">{profile.completed}</div>
@@ -2575,9 +2652,9 @@ function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSel
       const s = Number(status);
       const res = resolutionHistory[id.toString()];
       
-      const isFailed = res && res.winner === 'emp';
+      const isFailed = s === 6 || s === 7 || (res && res.winner === 'emp');
       const isCompleted = s === 4 || (res && res.winner === 'dev');
-      const isActive = (s === 2 || s === 3 || s === 5 || s === 8) && !res;
+      const isActive = !isFailed && !isCompleted && s >= 2 && s <= 8;
 
       if (isActive) active.push(id);
       if (isCompleted) completed.push(id);
@@ -2596,14 +2673,8 @@ function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSel
     setTimeout(() => setIsRefreshing(false), 1000);
   };
 
-  const liveReputation = {
-    tier: profile.rated ? profile.tier : 'Unrated',
-    coreIndex: profile.score,
-    completionRate: profile.completionRate,
-    disputePerformance: profile.disputePerformance,
-    earningsStability: profile.earningsStability,
-    activityScore: 100
-  };
+  const tier = profile.rated ? profile.tier : 'Unrated';
+  const score = profile.score;
 
   const counts = {
     active: items.active.length,
@@ -2623,13 +2694,13 @@ function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSel
               <div className="flex flex-col">
                 <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Reputation Tier</span>
                 <span className={cn("text-sm font-medium", !profile.rated ? "text-arc-ink/40" : "text-arc-ink")}>
-                  {liveReputation.tier}
+                  {tier}
                 </span>
               </div>
               <div className="flex flex-col border-l border-arc-line pl-6">
                 <span className="text-[9px] uppercase font-bold text-arc-ink/30 leading-tight">Score</span>
                 <span className="text-sm font-bold text-arc-ink">
-                  {profile.rated ? `=> ${liveReputation.coreIndex}` : "--"}
+                  {profile.rated ? `=> ${score}` : "--"}
                 </span>
               </div>
             </div>
@@ -2655,30 +2726,7 @@ function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSel
           </div>
         )}
         
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-          <SignalBar 
-            label="Completion Rate" 
-            score={liveReputation.completionRate} 
-            colorClass="bg-blue-500" 
-          />
-          <SignalBar 
-            label="Dispute Performance" 
-            score={liveReputation.disputePerformance} 
-            colorClass="bg-purple-500" 
-          />
-          <SignalBar 
-            label="Earnings Stability" 
-            score={liveReputation.earningsStability} 
-            colorClass="bg-emerald-500" 
-          />
-          <SignalBar 
-            label="Reliability Index" 
-            score={liveReputation.coreIndex} 
-            colorClass="bg-amber-500" 
-          />
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 pt-2">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 pt-2">
           <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Completed</div>
              <div className="text-xl font-mono">{profile.completed}</div>
@@ -2690,6 +2738,10 @@ function DeveloperProfile({ address, onSelect }: { address: `0x${string}`, onSel
           <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Total Earned</div>
              <div className="text-xl font-mono">${Math.floor(Number(formatUnits(profile.earned, USDC_DECIMALS))).toLocaleString()}</div>
+          </div>
+          <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center bg-purple-50/30">
+             <div className="text-[10px] uppercase font-bold text-purple-600/40 mb-1">Disputed Jobs</div>
+             <div className="text-xl font-mono text-purple-600">{profile.disputes}</div>
           </div>
           <div className="glass p-4 rounded-2xl border border-arc-line flex flex-col items-center justify-center text-center">
              <div className="text-[10px] uppercase font-bold text-arc-ink/30 mb-1">Disputes Won</div>
@@ -2790,9 +2842,9 @@ function JobFilterWrapper({ jobId, viewerAddress, mode, onSelect }: { key?: stri
   const res = resolutionHistory[jobId.toString()];
   
   // Deterministic Lifecycle Logic
-  const isFailed = res && res.winner === 'emp';
+  const isFailed = s === 6 || s === 7 || (res && res.winner === 'emp');
   const isCompleted = s === 4 || (res && res.winner === 'dev');
-  const isActive = (s === 2 || s === 3 || s === 5 || s === 8) && !res;
+  const isActive = !isFailed && !isCompleted && s >= 2 && s <= 8;
 
   if (mode === 'active' && (!isMine || !isActive)) return null;
   if (mode === 'completed' && (!isMine || !isCompleted)) return null;
@@ -2875,12 +2927,12 @@ function EmployerJobSection({ address, statuses, onSelect, isFailedSettlement, i
       const res = resolutionHistory[id.toString()];
       
       if (isFailedSettlement) {
-         // Employer view "Failed Settlements" = Won by Employer (developer lost) or legacy rejected/cancelled
-         return (status === 7 || status === 6 || (res && res.winner === 'emp'));
+         // Employer view "Failed Settlements" = Cancellation, Rejection, or Refunded (Dispute Won)
+         return (status === 6 || status === 7 || (res && res.winner === 'emp'));
       }
 
       if (isCompletedGroup) {
-         // Employer view "Completed Jobs" = Normally completed or won by Developer (employer lost)
+         // Employer view "Completed Jobs" = Normally completed or Paid out (Dispute Lost)
          return (status === 4 || (res && res.winner === 'dev'));
       }
 
@@ -3224,7 +3276,7 @@ function ActiveWalletIdentity({
 }
 
 function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { key?: string, jobId: bigint, viewerAddress: `0x${string}`, compact?: boolean, onSelect?: (id: bigint) => void, role?: 'developer' | 'employer' }) {
-  const { interactionState, setInteractionState, alert, jobsData, refetchJobs, resolutionHistory } = useAppContext();
+  const { interactionState, setInteractionState, alert, jobsData, refetchJobs, resolutionHistory, disputedJobs } = useAppContext();
   const job = jobsData[jobId.toString()];
   
   const queryClient = useQueryClient();
@@ -3287,20 +3339,35 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { key?: stri
   const isEmployer = viewerAddress?.toLowerCase() === employer?.toLowerCase();
   const isDeveloper = viewerAddress?.toLowerCase() === developer?.toLowerCase();
 
+  const actualRole = role || (isDeveloper ? 'developer' : (isEmployer ? 'employer' : undefined));
+
   // Requirement: Employer should never have access to the same job that he posted when he switch to his developer section
-  if (role === 'developer' && isEmployer) {
+  if (actualRole === 'developer' && isEmployer) {
     return null;
   }
 
   const rawStatusLabels = ["REQUESTED", "FUNDED", "ACCEPTED", "SUBMITTED", "COMPLETED", "DISPUTED", "CANCELLED", "REJECTED"];
-  const res = resolutionHistory[jobId.toString()];
+  
+  const disputedAt = disputedJobs[jobId.toString()] || 0n;
+  let res = resolutionHistory[jobId.toString()];
+  const isDisputed = disputedAt > 0n || Number(status) === 5 || !!res;
+  
+  // Heuristic Fallback
+  if (!res && isDisputed) {
+     if (Number(status) === 4) res = { winner: 'dev' };
+     if (Number(status) === 7 || Number(status) === 6) res = { winner: 'emp' };
+  }
   
   let displayStatus = rawStatusLabels[Number(status)];
+  let isDisputeVictory = false;
   
   // Deterministic outcome mapping for disputes
   if (res) {
-    const isWinner = res.winner === (role === 'developer' ? 'dev' : 'emp');
-    displayStatus = isWinner ? "DISPUTE_WON" : "DISPUTE_LOST";
+    const isWinner = actualRole ? (res.winner === (actualRole === 'developer' ? 'dev' : 'emp')) : false;
+    displayStatus = isWinner ? "DISPUTE WON" : "DISPUTE LOST";
+    isDisputeVictory = isWinner;
+  } else if (Number(status) === 6) {
+    displayStatus = "CANCELLED";
   } else if (Number(status) === 4) {
     displayStatus = "COMPLETED";
   } else if (Number(status) === 5) {
@@ -3650,8 +3717,8 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { key?: stri
              </div>
              <Badge className={cn(
                "shrink-0 border whitespace-nowrap",
-               Number(status) === 3 || displayStatus === "DISPUTE_WON" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : 
-               displayStatus === "DISPUTE_LOST" ? "bg-red-500/10 text-red-600 border-red-500/20" :
+               Number(status) === 3 || displayStatus === "DISPUTE WON" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : 
+               displayStatus === "DISPUTE LOST" || displayStatus === "CANCELLED" || displayStatus === "REJECTED" ? "bg-red-500/10 text-red-600 border-red-500/20" :
                "bg-arc-ink/5 text-arc-ink/40 border-arc-line"
              )}>
                {displayStatus}
@@ -3722,12 +3789,15 @@ function JobCard({ jobId, viewerAddress, compact, onSelect, role }: { key?: stri
               )}
             </div>
             <h3 className="text-xl font-semibold tracking-tight">{parsedMetadata.title}</h3>
-            <div className="text-[10px] uppercase font-bold text-emerald-600 tracking-widest flex items-center gap-1">
+            <div className={cn(
+              "text-[10px] uppercase font-bold tracking-widest flex items-center gap-1",
+              (displayStatus || "").includes("LOST") || displayStatus === "CANCELLED" || displayStatus === "REJECTED" ? "text-red-500" : "text-emerald-600"
+            )}>
               <div className={cn(
                 "w-1.5 h-1.5 rounded-full animate-pulse",
-                displayStatus.includes("LOST") ? "bg-red-500" : "bg-emerald-500"
+                (displayStatus || "").includes("LOST") || displayStatus === "CANCELLED" || displayStatus === "REJECTED" ? "bg-red-500" : "bg-emerald-500"
               )} />
-              {displayStatus}
+              {displayStatus || "UNKNOWN"}
             </div>
           </div>
         </div>

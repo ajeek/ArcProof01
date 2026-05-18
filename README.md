@@ -1,135 +1,155 @@
 # ArcProof
-### Deterministic Work Settlement Layer on @arc
+Deterministic Work Settlement Infrastructure for Onchain Trust Systems
 
-ArcProof is a deterministic work settlement layer built on Arc. It is engineered to enforce programmable state transitions for work lifecycles, ensuring that execution outcomes correlate directly with onchain financial settlement.
+ArcProof is a deterministic work settlement layer built on Arc. It converts escrowed work into verifiable onchain state transitions and produces structured behavioral signals across counterparties.
 
-ArcProof is NOT a marketplace, hiring platform, or freelancing application. It IS:
-* A deterministic escrow execution system.
-* An onchain work lifecycle engine.
-* A USDC-native settlement infrastructure.
+These signals form reusable infrastructure for credit systems, marketplaces, and coordination layers.
 
-In this system, work is represented as a series of verifiable state transitions rather than static listings.
+ArcProof is not a marketplace layer. It is a settlement protocol that can support marketplace-like interactions without implementing discovery, matching, or listing logic.
 
-## System Overview
+It focuses on execution, verification, and settlement, not coordination or demand generation.
 
-ArcProof operates as a hard-coded execution environment for work agreements. The protocol abstracts the horizontal complexities of "hiring" into a vertical settlement stack:
-* **Deterministic Escrow Execution**: Funds are locked in a state-aware vault, releasable only upon reaching terminal success states.
-* **Onchain Work Lifecycle Engine**: Enforces a strict sequence of events (Created -> Funded -> Submitted -> Reviewed -> Finalized).
-* **USDC-Native Settlement**: Utilizes USDC as the primary accounting and settlement unit for sub-second deterministic finality.
+System Overview
 
-## Core Problem
+ArcProof operates as a deterministic execution environment for work agreements.
 
-Current work-related infrastructure suffers from a critical execution gap:
-* **Lifecycle Ambiguity**: No deterministic onchain enforcement of work progress or completion.
-* **Fragmented Escrow**: Escrow systems typically lack a unified state machine, leading to "orphaned" funds or manual intervention.
-* **Reputation Drift**: Reputation metrics are often decoupled from the actual financial settlement state.
-* **Dispute Inconsistency**: Resolution mechanisms are frequently offchain, subjective, or protocol-agnostic.
+It abstracts work into a state machine that produces two outputs:
 
-## Execution Model
+Settlement finality
+Behavioral trust history across counterparties
 
-The ArcProof state machine enforces a rigid lifecycle for every escrowed job:
+Core properties:
 
-**Created** → **Funded** → **Submitted** → **Reviewed** → **Finalized**
+Deterministic Escrow Execution: Funds are locked in a state-aware vault, released only on valid terminal states.
+Onchain Work Lifecycle Engine: Enforces strict event progression from creation to final settlement.
+USDC-Native Settlement: Uses USDC as the settlement unit for deterministic finality.
+Trust Signal Generation: Each completed cycle produces structured behavioral data for external systems.
 
-* **State Enforcement**: Transitions are contract-enforced; a state cannot be bypassed.
-* **Deterministic Outcomes**: Each job has exactly one final state (Completed, Cancelled, or Resolved via Dispute).
-* **Zero Ambiguity**: Intermediate states are clearly defined and verifiable.
+Core Problem
 
-## Escrow Flow
+Current work infrastructure separates execution from trust.
 
-The protocol mandates a precise sequence for financial commitment:
-1. **Create Escrow Job**: Define parameters and target developer.
-2. **Approve USDC**: Exact amount only; the protocol explicitly avoids unlimited approval patterns.
-3. **Fund Escrow**: Transfer USDC to the deterministic vault.
-4. **Submit Work**: Developer registers proof of execution.
-5. **Review Outcome**: Employer evaluates the submission against the agreed state.
-6. **Finalize State**: Transition to terminal state (Accepted / Rejected / Disputed Resolution).
+Lifecycle Ambiguity: Work completion is not verifiable as state.
+Fragmented Escrow: Settlement lacks consistent state enforcement.
+Reputation Drift: Reputation is detached from actual financial outcomes.
+Missing Behavioral Data: Credit systems lack execution-level history.
 
-## Architecture
+ArcProof closes this gap by binding work execution to verifiable state transitions.
 
-### System Architecture
+Execution Model
+
+The ArcProof state machine enforces a rigid lifecycle:
+
+Created → Funded → Submitted → Reviewed → Finalized
+
+State Enforcement: Transitions are contract-enforced and non-skippable
+Deterministic Outcomes: Each job resolves into a single terminal state
+Behavioral Binding: Every transition contributes to trust history
+
+Escrow Flow
+
+Create escrow job
+Approve USDC
+Fund escrow
+Submit work
+Review outcome
+Finalize state
+
+Each step is a verifiable economic event contributing to system-level trust data.
+
+Architecture
+
 ```mermaid
 graph TD
-    User[User: Employer / Developer] --> Frontend[Frontend Layer]
-    Frontend --> Contracts[Smart Contracts Layer]
-    Contracts --> Arc[Arc Testnet: USDC Settlement Layer]
+User --> Frontend
+Frontend --> Contracts
+Contracts --> Arc
 ```
 
-### State Machine Diagram
 ```mermaid
 stateDiagram-v2
-    [*] --> Created
-    Created --> Funded
-    Funded --> Submitted
-    Submitted --> Reviewed
-    Reviewed --> Accepted
-    Reviewed --> Rejected
-    Reviewed --> Disputed
-    Accepted --> Finalized
-    Rejected --> Submitted: Resubmission
-    Disputed --> Resolution
-    Resolution --> Finalized
+[*] --> Created
+Created --> Funded
+Funded --> Submitted
+Submitted --> Reviewed
+Reviewed --> Accepted
+Reviewed --> Rejected
+Reviewed --> Disputed
+Accepted --> Finalized
+Rejected --> Submitted
+Disputed --> Resolution
+Resolution --> Finalized
 ```
 
-### Wallet Flow Diagram
-```mermaid
-flowchart LR
-    A[Create Job] --> B[Approve USDC]
-    B --> C[Fund Escrow]
-    C --> D[Final State]
-```
+Smart Contracts
 
-## Smart Contracts
+JobEscrow.sol
 
-### JobEscrow.sol
-The core execution engine. It manages the deterministic escrow vault and enforces the job lifecycle state machine. It handles the logic for funding, work submission, and payment release based on state transitions.
+Handles deterministic escrow execution and lifecycle enforcement.
 
-### ReputationRegistry.sol
-An execution outcome registry. It tracks the historical state transitions of participants (e.g., success rates, dispute frequency) to provide a verifiable performance mapping based entirely on finalized settlement data. It manages the **DevScore**, a deterministic reputation scoring system updated onchain based on job execution outcomes.
+ReputationRegistry.sol
 
-## Escrow Board UI
+Stores execution outcomes as structured behavioral data.
 
-The management interface is partitioned into deterministic state buckets:
-* **Active Escrows**: Jobs in Funded or Submitted states.
-* **Rejected State**: Jobs requiring resubmission or escalation.
-* **In Dispute**: Jobs currently undergoing resolution.
-* **Completed**: Jobs that have reached successful terminal settlement.
-* **Cancelled**: Jobs terminated before assignment or funding completion.
+Reputation is derived from:
 
-## Reputation Model
+completion under escrow conditions
+dispute outcomes
+settlement reliability across counterparties
+execution consistency over time
 
-Reputation in ArcProof is defined as a performance state tracking system:
-* **Execution Outcome Registry**: Aggregates successful vs. failed state transitions.
-* **Performance State Tracking**: Quantifies "Work Done" as "USDC Settled."
-* **Dispute Mapping**: Tracks resolution history to identify risk profiles.
-* **DevScore Index**: A real-time execution index computed from verifiable onchain outcome data. No NFT or identity framing is used.
+Reputation Model
 
-## Arc Alignment
+Reputation in ArcProof is not a social score.
 
-The system is optimized for the Arc ecosystem's performance characteristics:
-* **USDC-Native Execution**: Built for the dominant settlement asset on Arc.
-* **Deterministic Settlement**: Leverages high-speed block times for sub-second updates.
-* **Arc Testnet Deployment**: Native integration with Arc chain parameters.
-* **Lifecycle Alignment**: Follows architectural patterns conducive to high-fidelity onchain execution.
+It is a behavioral history layer derived from settlement outcomes.
 
-## UI Constraints
+It reflects:
 
-Wallet interactions are strictly sequenced to maintain system integrity:
-1. **Create Job**: Initialize state.
-2. **Approve USDC**: Authorize exact amount.
-3. **Fund Escrow**: Lock capital.
+execution reliability under real economic conditions
+dispute frequency and resolution patterns
+counterparty interaction history
+consistency of settlement behavior
 
-**Final State**: *Escrow Finalized. Job Registered Onchain.*
+This data is structured for external consumption by credit systems and coordination layers.
 
-## Deployment
+Escrow Board UI
 
-**Network**: Arc Testnet  
-**RPC Endpoint**: `https://rpc.arc.testnet`  
+Active Escrows: funded or in execution
+In Dispute: unresolved state transitions
+Completed: finalized settlements
+Cancelled: terminated before resolution
 
-### Contract Addresses
-* **JobEscrow**: `0xBa2B389B68E2cC6025AF235d460043c160D6bBa3`
-* **ReputationRegistry**: `0x6453D3AbbB79ed84799EA65A313FA7054a3878C7`
-* **USDC**: `0x3600000000000000000000000000000000000000`
+Arc Alignment
 
----
-*ArcProof: Deterministic execution for the work economy.*
+USDC-native settlement
+deterministic state transitions
+high-frequency finality environment
+optimized for structured economic data generation
+
+UI Constraints
+
+Create Job
+Approve USDC
+Fund Escrow
+
+Final State: Escrow finalized, behavioral data recorded.
+
+Deployment
+
+Network: Arc Testnet
+RPC: https://rpc.arc.testnet
+
+Contracts:
+
+JobEscrow: `0xBa2B389B68E2cC6025AF235d460043c160D6bBa3`
+ReputationRegistry: `0x6453D3AbbB79ed84799EA65A313FA7054a3878C7`
+USDC: `0x3600000000000000000000000000000000000000`
+
+Core Positioning
+
+ArcProof is a deterministic settlement protocol that converts work execution into structured behavioral history for onchain trust and credit systems.
+
+Final Line
+
+ArcProof transforms escrowed work into verifiable state transitions and converts those states into reusable trust infrastructure for economic systems.
