@@ -88,9 +88,9 @@ async function startServer() {
           total_stars: totalStars,
         },
       });
-    } catch (error) {
-      console.error("[GitHub Verify] Error:", error);
-      res.status(404).json({ valid: false, error: "GitHub user not found or API error" });
+    } catch (error: any) {
+      console.error("[GitHub Verify] Error for", username, ":", error.message);
+      res.status(404).json({ valid: false, error: error.status === 403 ? "GitHub rate limit exceeded. Please try again later." : "GitHub user not found or API error" });
     }
   });
 

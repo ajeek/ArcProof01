@@ -717,7 +717,13 @@ export default function App() {
     setIsVerifying(true);
     setOnboardingError(null);
     try {
-      const res = await fetch(`/api/github-verify?username=${onboardingGithub}`);
+      const res = await fetch(`/api/github-verify?username=${encodeURIComponent(onboardingGithub.trim())}`);
+      
+      if (!res.headers.get("content-type")?.includes("application/json")) {
+         const text = await res.text();
+         throw new Error(`Invalid server response (${res.status}): ${text.substring(0, 50)}...`);
+      }
+      
       const data = await res.json();
       if (data.valid) {
         setGithubPreview(data.user);
@@ -725,8 +731,8 @@ export default function App() {
       } else {
         setOnboardingError(data.error || "GitHub profile not found");
       }
-    } catch (err) {
-      setOnboardingError("Failed to connect to verification service");
+    } catch (err: any) {
+      setOnboardingError("Verification failed: " + (err.message || String(err)));
     } finally {
       setIsVerifying(false);
     }
@@ -741,8 +747,14 @@ export default function App() {
       const res = await fetch('/api/github-bind', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: onboardingGithub, walletAddress: address })
+        body: JSON.stringify({ username: onboardingGithub.trim(), walletAddress: address })
       });
+      
+      if (!res.headers.get("content-type")?.includes("application/json")) {
+         const text = await res.text();
+         throw new Error(`Invalid server response (${res.status}): ${text.substring(0, 50)}...`);
+      }
+      
       const data = await res.json();
       
       if (!data.success) {
