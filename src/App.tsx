@@ -792,7 +792,7 @@ export default function App() {
   const [resolutionHistory, setResolutionHistory] = useState<Record<string, { winner: 'dev' | 'emp' }>>({});
   const [isReinitializing, setIsReinitializing] = useState(false);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
-  const [showHomeOverlay, setShowHomeOverlay] = useState(false);
+  const [showHomeOverlay, setShowHomeOverlay] = useState(true);
   const prevAddress = useRef(address);
 
   useEffect(() => {
@@ -1177,51 +1177,52 @@ export default function App() {
             </div>
           )}
 
-          {!isConnected ? (
-            <div className="flex items-center gap-2 md:gap-3 shrink-0">
-              <a 
-                href="https://faucet.circle.com/" 
-                target="_blank" 
-                rel="noreferrer"
-                className="hidden sm:flex text-[10px] font-bold uppercase tracking-widest text-arc-ink/40 hover:text-arc-ink transition-colors items-center gap-1 whitespace-nowrap"
-              >
-                Faucet <ExternalLink className="w-3 h-3" />
-              </a>
-              <Button onClick={() => connect({ connector: connectors[0] })} className="whitespace-nowrap text-sm px-4 py-2">
-                <Wallet className="w-4 h-4 mr-1 sm:mr-0" />
-                <span className="sm:inline">Connect</span>
-              </Button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 shrink-0">
-              {isConnected && chain?.id !== 5042002 && (
-                <button 
-                  onClick={() => switchChain({ chainId: 5042002 })}
-                  className="bg-red-500/10 text-red-500 text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded animate-pulse sm:mr-2 border border-red-500/20 hover:bg-red-500/20 transition-colors cursor-pointer whitespace-nowrap"
+          {!showHomeOverlay && (
+            !isConnected ? (
+              <div className="flex items-center gap-2 md:gap-3 shrink-0">
+                <Button 
+                  variant="secondary"
+                  onClick={() => window.open("https://faucet.circle.com/", "_blank")}
+                  className="hidden sm:flex whitespace-nowrap text-sm px-4 py-2"
                 >
-                  <span className="hidden sm:inline">Switch to </span>Arc Testnet
-                </button>
-              )}
-              <div className="hidden sm:flex flex-col items-end mr-2 shrink-0">
-                <span className="text-[10px] font-bold text-arc-ink/40 uppercase tracking-widest">Balance</span>
-                <span className="text-xs font-mono font-medium whitespace-nowrap">
-                  {usdcBalance ? Math.floor(Number(formatUnits(usdcBalance as bigint, USDC_DECIMALS))).toLocaleString() : "0"} USDC
-                </span>
+                  Faucet <ExternalLink className="w-4 h-4 ml-1" />
+                </Button>
+                <Button onClick={() => connect({ connector: connectors[0] })} className="whitespace-nowrap text-sm px-4 py-2">
+                  <Wallet className="w-4 h-4 mr-1 sm:mr-0" />
+                  <span className="sm:inline">Connect</span>
+                </Button>
               </div>
-              <button 
-                onClick={() => disconnect()}
-                className="group flex items-center justify-center gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-medium bg-arc-ink/5 border border-arc-line hover:bg-red-50 hover:border-red-100 transition-all relative overflow-hidden shrink-0"
-              >
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse group-hover:bg-red-500 group-hover:animate-none shrink-0" />
-                <span className="transition-all duration-200 group-hover:opacity-0 group-hover:translate-y-[-10px] whitespace-nowrap">
-                  {address?.slice(0, 4)}...{address?.slice(-4)}
-                </span>
-                <span className="absolute inset-x-0 inset-y-0 flex items-center justify-center gap-1 sm:gap-2 text-red-600 font-bold uppercase text-[10px] tracking-widest opacity-0 translate-y-[10px] transition-all duration-200 group-hover:opacity-100 group-hover:translate-y-0">
-                  <X className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
-                  <span className="hidden sm:inline">Disconnect</span>
-                </span>
-              </button>
-            </div>
+            ) : (
+              <div className="flex items-center gap-2 shrink-0">
+                {isConnected && chain?.id !== 5042002 && (
+                  <button 
+                    onClick={() => switchChain({ chainId: 5042002 })}
+                    className="bg-red-500/10 text-red-500 text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded animate-pulse sm:mr-2 border border-red-500/20 hover:bg-red-500/20 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <span className="hidden sm:inline">Switch to </span>Arc Testnet
+                  </button>
+                )}
+                <div className="hidden sm:flex flex-col items-end mr-2 shrink-0">
+                  <span className="text-[10px] font-bold text-arc-ink/40 uppercase tracking-widest">Balance</span>
+                  <span className="text-xs font-mono font-medium whitespace-nowrap">
+                    {usdcBalance ? Math.floor(Number(formatUnits(usdcBalance as bigint, USDC_DECIMALS))).toLocaleString() : "0"} USDC
+                  </span>
+                </div>
+                <button 
+                  onClick={() => disconnect()}
+                  className="group flex items-center justify-center gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-medium bg-arc-ink/5 border border-arc-line hover:bg-red-50 hover:border-red-100 transition-all relative overflow-hidden shrink-0"
+                >
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse group-hover:bg-red-500 group-hover:animate-none shrink-0" />
+                  <span className="transition-all duration-200 group-hover:opacity-0 group-hover:translate-y-[-10px] whitespace-nowrap">
+                    {address?.slice(0, 4)}...{address?.slice(-4)}
+                  </span>
+                  <span className="absolute inset-x-0 inset-y-0 flex items-center justify-center gap-1 sm:gap-2 text-red-600 font-bold uppercase text-[10px] tracking-widest opacity-0 translate-y-[10px] transition-all duration-200 group-hover:opacity-100 group-hover:translate-y-0">
+                    <X className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
+                    <span className="hidden sm:inline">Disconnect</span>
+                  </span>
+                </button>
+              </div>
+            )
           )}
         </div>
       </nav>
@@ -1230,7 +1231,7 @@ export default function App() {
         
         {/* Connection Check */}
         <AnimatePresence mode="wait">
-          {!isConnected || showHomeOverlay ? (
+          {showHomeOverlay ? (
             <motion.div 
               key="landing"
               initial={{ opacity: 0 }}
@@ -1252,15 +1253,9 @@ export default function App() {
               </p>
             </div>
             <div className="flex flex-col md:flex-row items-center gap-3 md:gap-4 w-full md:w-auto max-w-sm md:max-w-none mx-auto">
-              {isConnected ? (
-                <Button onClick={() => setShowHomeOverlay(false)} className="w-full md:w-auto px-8 md:px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-base md:text-lg">
-                  Launch Dashboard
-                </Button>
-              ) : (
-                <Button onClick={() => connect({ connector: connectors[0] })} className="w-full md:w-auto px-8 md:px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-base md:text-lg">
-                  Launch Dashboard
-                </Button>
-              )}
+              <Button onClick={() => setShowHomeOverlay(false)} className="w-full md:w-auto px-8 md:px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-base md:text-lg">
+                Launch Dashboard
+              </Button>
               <Button 
                 variant="secondary" 
                 onClick={() => setShowHowItWorks(!showHowItWorks)}
@@ -1451,24 +1446,14 @@ export default function App() {
             )}
           </div>
         </motion.div>
-      ) : !address ? (
-              <motion.div 
-                key="loading-identity"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="h-[70vh] flex items-center justify-center w-full"
-              >
-                <Loader2 className="w-8 h-8 animate-spin text-arc-ink/20" />
-              </motion.div>
-            ) : (
-              <motion.div
-                key={`app-${address}`}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-8 flex-1 w-full"
-              >
+      ) : (
+        <motion.div
+          key={`app-${address || 'disconnected'}`}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="space-y-8 flex-1 w-full"
+        >
             {/* Hero Section */}
             <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
               <div className="space-y-2">
@@ -2019,8 +2004,7 @@ export default function App() {
            </div>
 
            <div className="flex items-center gap-6 text-[10px] uppercase font-bold tracking-widest">
-              <span className="opacity-50">Mainnet Alpha</span>
-              <span className="opacity-50">V1.0.4</span>
+              <span className="opacity-50">ArcProof V1</span>
            </div>
         </div>
       </footer>
