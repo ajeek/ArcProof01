@@ -713,7 +713,10 @@ export default function App() {
   }, []);
 
    const handleVerifyProfile = async () => {
-    if (!onboardingGithub) return;
+    if (!onboardingGithub || !onboardingGithub.trim()) {
+      setOnboardingError("Please enter a GitHub username");
+      return;
+    }
     setIsVerifying(true);
     setOnboardingError(null);
     try {
@@ -732,7 +735,11 @@ export default function App() {
         setOnboardingError(data.error || "GitHub profile not found");
       }
     } catch (err: any) {
-      setOnboardingError("Verification failed: " + (err.message || String(err)));
+      if (err.name === 'TypeError' && err.message === 'Failed to fetch') {
+        setOnboardingError("Network error. Please check your connection and try again.");
+      } else {
+        setOnboardingError("Verification failed: " + (err.message || String(err)));
+      }
     } finally {
       setIsVerifying(false);
     }
@@ -771,7 +778,11 @@ export default function App() {
         setShowOnboarding(false);
       }
     } catch (err: any) {
-      setOnboardingError(err.message || "Connection failure during binding");
+      if (err.name === 'TypeError' && err.message === 'Failed to fetch') {
+        setOnboardingError("Network error. Please check your connection and try again.");
+      } else {
+        setOnboardingError(err.message || "Connection failure during binding");
+      }
       setOnboardingStep('preview');
     } finally {
       setIsBinding(false);

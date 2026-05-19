@@ -51,27 +51,29 @@ async function startServer() {
   // GitHub Verification (Offchain Only)
   app.get("/api/github-verify", async (req, res) => {
     const { username } = req.query;
-    if (!username || typeof username !== "string") {
-      return res.status(400).json({ error: "Username is required" });
+    if (!username || typeof username !== "string" || username.trim() === "") {
+      return res.status(200).json({ valid: false, error: "Username is required" });
     }
+
+    const trimmedUsername = username.trim();
 
     try {
       // 1. Basic User Info
       const userResponse = await octokit.rest.users.getByUsername({
-        username,
+        username: trimmedUsername,
       });
       const userData = userResponse.data;
 
       // 2. Merged PRs count
       const prResponse = await octokit.rest.search.issuesAndPullRequests({
-        q: `author:${username} type:pr is:merged`,
+        q: `author:${trimmedUsername} type:pr is:merged`,
         per_page: 1,
       });
       const mergedPRs = prResponse.data.total_count;
 
       // 3. Total Stars received
       const repoResponse = await octokit.rest.search.repos({
-        q: `user:${username}`,
+        q: `user:${trimmedUsername}`,
         per_page: 100,
       });
       const totalStars = repoResponse.data.items.reduce((acc, repo) => acc + repo.stargazers_count, 0);
@@ -89,8 +91,8 @@ async function startServer() {
         },
       });
     } catch (error: any) {
-      console.error("[GitHub Verify] Error for", username, ":", error.message);
-      res.status(404).json({ valid: false, error: error.status === 403 ? "GitHub rate limit exceeded. Please try again later." : "GitHub user not found or API error" });
+      console.error("[GitHub Verify] Error for", trimmedUsername, ":", error.message);
+      res.status(200).json({ valid: false, error: (error.status === 403 || error.status === 429) ? "GitHub rate limit exceeded. Please try again later." : "Invalid GitHub username" });
     }
   });
 
@@ -176,26 +178,28 @@ async function startServer() {
     // GitHub Binding API (Attestation Signer)
     app.post("/api/github-bind", async (req, res) => {
       const { username, walletAddress } = req.body;
-      if (!username || !walletAddress) {
-        return res.status(400).json({ error: "Username and wallet address are required" });
+      if (!username || typeof username !== "string" || username.trim() === "" || !walletAddress) {
+        return res.status(200).json({ success: false, error: "Username and wallet address are required" });
       }
+      
+      const trimmedUsername = username.trim();
 
       try {
         // 1. Validate via Octokit
         const githubResponse = await octokit.rest.users.getByUsername({
-          username,
+          username: trimmedUsername,
         });
         const validatedUsername = githubResponse.data.login;
 
         // 2. Check for existing bindings (Contract as Source of Truth)
         const existingWallet = await registryContract.githubToAddress(validatedUsername);
         if (existingWallet !== ethers.ZeroAddress) {
-           return res.status(400).json({ error: "GitHub account already linked to another wallet" });
+           return res.status(200).json({ success: false, error: "GitHub username already linked to another wallet" });
         }
         
         const existingGithub = await registryContract.addressToGithub(walletAddress);
         if (existingGithub !== "") {
-           return res.status(400).json({ error: "Wallet already linked to a GitHub account" });
+           return res.status(200).json({ success: false, error: "Wallet already linked to a GitHub account" });
         }
 
         const normalizedWalletAddress = ethers.getAddress(walletAddress);
@@ -221,9 +225,13 @@ async function startServer() {
           throw new Error("On-chain binding failed: " + (txErr.reason || txErr.message));
         }
       } catch (error: any) {
-        console.error("[GitHub Bind] Error:", error);
-        const errMsg = error.reason || error.message || "Attestation failed";
-        res.status(400).json({ error: errMsg });
+        console.error("[GitHub Bind] Error:", error.message);
+        let errMsg = "Attestation failed";
+        if (error.status === 404) errMsg = "Invalid GitHub username";
+        else if (error.status === 403 || error.status === 429) errMsg = "GitHub rate limit exceeded. Please try again later.";
+        else if (error.message && error.message.startsWith("On-chain binding failed")) errMsg = "Transaction failed on network";
+        else if (error.reason) errMsg = "Transaction failed on network";
+        res.status(200).json({ success: false, error: errMsg });
       }
     });
 
@@ -231,7 +239,7 @@ async function startServer() {
     app.post("/api/github-reset", async (req, res) => {
       const { walletAddress } = req.body;
       if (!walletAddress) {
-        return res.status(400).json({ error: "Wallet address is required" });
+        return res.status(200).json({ success: false, error: "Wallet address is required" });
       }
 
       try {
@@ -246,8 +254,8 @@ async function startServer() {
           txHash: tx.hash
         });
       } catch (error: any) {
-        console.error("[GitHub Reset] Error:", error);
-        res.status(400).json({ error: error.message || "Failed to unbind GitHub" });
+        console.error("[GitHub Reset] Error:", error.message);
+        res.status(200).json({ success: false, error: "Failed to unbind GitHub" });
       }
     });
 
