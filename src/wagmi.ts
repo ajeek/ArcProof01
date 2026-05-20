@@ -1,6 +1,7 @@
 import { http, createConfig, webSocket, fallback } from 'wagmi';
 import { mainnet } from 'wagmi/chains';
 import { type Chain } from 'viem';
+import { injected, walletConnect } from 'wagmi/connectors';
 
 export const arcTestnet = {
   id: 5042002,
@@ -20,6 +21,13 @@ export const arcTestnet = {
 
 export const config = createConfig({
   chains: [arcTestnet, mainnet],
+  connectors: [
+    injected(),
+    walletConnect({
+      projectId: '3fcc6bba6f1de962d911bb5b5c3dba68',
+      showQrModal: true,
+    }),
+  ],
   transports: {
     [arcTestnet.id]: fallback([
       webSocket('wss://rpc.testnet.arc.network'),

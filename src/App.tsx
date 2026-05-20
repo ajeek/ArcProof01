@@ -1193,7 +1193,18 @@ export function AppContent() {
                 >
                   Faucet <ExternalLink className="w-4 h-4 ml-1" />
                 </Button>
-                <Button onClick={() => connect({ connector: connectors[0] })} className="whitespace-nowrap text-sm px-4 py-2">
+                <Button onClick={async () => {
+                  try {
+                    const isMobile = /iPhone|Android/i.test(navigator.userAgent);
+                    const walletConnectConnector = connectors.find(c => c.id === 'walletConnect');
+                    const injectedConnector = connectors.find(c => c.id === 'injected' || c.id === 'metaMask');
+                    const activeConnector = (isMobile && walletConnectConnector) ? walletConnectConnector : (injectedConnector || connectors[0]);
+                    
+                    connect({ connector: activeConnector });
+                  } catch (err) {
+                    console.error("Wallet connection failed", err);
+                  }
+                }} className="whitespace-nowrap text-sm px-4 py-2">
                   <Wallet className="w-4 h-4 mr-1 sm:mr-0" />
                   <span className="sm:inline">Connect</span>
                 </Button>
