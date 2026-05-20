@@ -1193,18 +1193,24 @@ export function AppContent() {
                 >
                   Faucet <ExternalLink className="w-4 h-4 ml-1" />
                 </Button>
-                <Button onClick={async () => {
-                  try {
-                    const isMobile = /iPhone|Android/i.test(navigator.userAgent);
-                    const walletConnectConnector = connectors.find(c => c.id === 'walletConnect');
-                    const injectedConnector = connectors.find(c => c.id === 'injected' || c.id === 'metaMask');
-                    const activeConnector = (isMobile && walletConnectConnector) ? walletConnectConnector : (injectedConnector || connectors[0]);
-                    
-                    connect({ connector: activeConnector });
-                  } catch (err) {
-                    console.error("Wallet connection failed", err);
-                  }
-                }} className="whitespace-nowrap text-sm px-4 py-2">
+                <Button 
+                  onClick={() => {
+                    try {
+                      const hasInjected = typeof window !== 'undefined' && !!(window as any).ethereum;
+                      const injectedConnector = connectors.find(c => c.id === 'injected' || c.id === 'metaMask');
+                      const walletConnectConnector = connectors.find(c => c.id === 'walletConnect' || c.type === 'walletConnect');
+                      
+                      const activeConnector = (hasInjected && injectedConnector) ? injectedConnector : (walletConnectConnector || connectors[0]);
+                      
+                      if (activeConnector) {
+                        connect({ connector: activeConnector });
+                      }
+                    } catch (err) {
+                      console.error("Wallet connect failed", err);
+                    }
+                  }}
+                  className="whitespace-nowrap text-sm px-4 py-2 relative z-50 pointer-events-auto cursor-pointer"
+                >
                   <Wallet className="w-4 h-4 mr-1 sm:mr-0" />
                   <span className="sm:inline">Connect</span>
                 </Button>
