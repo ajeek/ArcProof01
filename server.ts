@@ -259,6 +259,11 @@ async function startServer() {
       }
     });
 
+    // Handle unknown API routes gracefully
+    app.all("/api/*", (req, res) => {
+      res.status(404).json({ error: "API route not found" });
+    });
+
     // Function to re-initialize if RPC fails
     const reconnectIndexer = () => {
       console.warn("[Indexer] Reconnecting to RPC...");
@@ -381,6 +386,17 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
+
+    app.use("*", async (req, res, next) => {
+      try {
+        let template = await import("fs").then(fs => fs.readFileSync(path.resolve(process.cwd(), "index.html"), "utf-8"));
+        template = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).set({ "Content-Type": "text/html" }).end(template);
+      } catch (e: any) {
+        vite.ssrFixStacktrace(e);
+        res.status(500).end(e.message);
+      }
+    });
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));

@@ -17,17 +17,21 @@ export function Home() {
       className="flex-1 flex flex-col items-center"
     >
       <div className={cn("flex flex-col items-center justify-center text-center space-y-8 py-12 md:py-20", showHowItWorks ? "min-h-screen" : "h-[70vh]")}>
-        <div className="w-24 h-24 bg-arc-ink/[0.03] rounded-full flex items-center justify-center border border-arc-line shadow-inner">
-          <ShieldCheck className="w-12 h-12 opacity-20" />
-        </div>
-        <div className="space-y-4">
-          <h1 className="text-4xl md:text-5xl font-bold tracking-tight">Deterministic Work Settlement Infrastructure</h1>
-          <p className="text-arc-ink/50 max-w-2xl mx-auto text-lg text-center">
-            Escrow work, verify execution, and settle USDC through programmable onchain state transitions with sub second deterministic finality on Arc
-          </p>
-          <p className="text-arc-ink/50 max-w-2xl mx-auto text-lg text-center">
-            Each settlement produces structured behavioral signals that form the foundation for trust and credit systems
-          </p>
+        <div className="flex flex-col items-center w-full">
+          <img
+            src="/arcproof-logo.png"
+            alt="ArcProof Logo"
+            className="h-16 w-16 mb-4 object-contain"
+          />
+          <div className="space-y-4">
+            <h1 className="text-4xl md:text-5xl font-bold tracking-tight">Deterministic Work Settlement Infrastructure</h1>
+            <p className="text-arc-ink/50 max-w-2xl mx-auto text-lg text-center">
+              Escrow work, verify execution, and settle USDC through programmable onchain state transitions with sub second deterministic finality on Arc
+            </p>
+            <p className="text-arc-ink/50 max-w-2xl mx-auto text-lg text-center">
+              Each settlement produces structured behavioral signals that form the foundation for trust and credit systems
+            </p>
+          </div>
         </div>
         <div className="flex flex-col md:flex-row items-center gap-3 md:gap-4 w-full md:w-auto max-w-sm md:max-w-none mx-auto">
           <Button onClick={() => navigate('/dashboard')} className="w-full md:w-auto px-8 md:px-16 py-4 rounded-2xl shadow-2xl shadow-arc-ink/20 text-base md:text-lg">

@@ -1157,9 +1157,11 @@ export function AppContent() {
             setSelectedJobId(null);
           }}
         >
-          <div className="w-8 h-8 bg-arc-ink rounded-lg flex items-center justify-center shrink-0">
-            <ShieldCheck className="text-white w-5 h-5" />
-          </div>
+          <img
+            src="/arcproof-logo.png"
+            alt="ArcProof Logo"
+            className="h-8 w-8 object-contain"
+          />
           <span className="hidden sm:inline-block font-semibold tracking-tighter text-xl italic font-serif">ArcProof</span>
         </div>
 
@@ -1781,7 +1783,11 @@ export function AppContent() {
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8 opacity-40">
            <div className="flex flex-col items-center md:items-start gap-1">
               <div className="flex items-center gap-2">
-                 <ShieldCheck className="w-5 h-5" />
+                 <img
+                   src="/arcproof-logo.png"
+                   alt="ArcProof Logo"
+                   className="h-5 w-5 object-contain"
+                 />
                  <span className="font-serif italic font-medium text-lg">ArcProof</span>
               </div>
               <div className="text-[10px] font-mono tracking-tighter uppercase font-bold">
